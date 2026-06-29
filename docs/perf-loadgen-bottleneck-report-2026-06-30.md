@@ -279,3 +279,5 @@ SubmitTransaction: 1.47s / 7.76% cum
 ```
 
 Current clean max remains `146.7 trades/s`. Experimental `time_inflight2` reached `150.2 trades/s`, but it produced two taker nonce errors, so it is not counted as the clean ceiling.
+
+Additional local loadgen experiments are recorded in `docs/perf-loadgen-experiment-log-2026-06-30.md`. The tested variants did not beat the current clean max; the core-side bottleneck diagnosis remains unchanged.
