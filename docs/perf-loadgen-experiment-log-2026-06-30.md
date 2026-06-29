@@ -430,3 +430,57 @@ increase filled TPS. It lowers maker liquidity slightly and the profile remains
 dominated by core sequencing and dirty snapshot copy/hash work. Keep the option
 as diagnostics/hygiene, not as the max-TPS path.
 ```
+
+## Healthy Maker Pool Selection Experiment
+
+Loadgen change:
+
+```text
+match.py: add MATCH_MAKER_POOL_COUNT, MATCH_HEALTHY_MAKER_MIN_FREE, MATCH_HEALTHY_MAKER_MAX_ABS_POS
+match.py: select makers from a larger pool by free margin and absolute position
+match.py: expose health_maker_skipped in DONE summary
+perf_stages.py: add healthy_makers stage
+```
+
+Reason:
+
+```text
+The first 30 maker accounts all have residual positions, and 29/30 have
+abs(position) > 0.05. Across the full 150 maker pool there are enough accounts
+with free margin >= 500 and abs(position) <= 0.02, so the test checks whether a
+cleaner maker set recovers TPS.
+```
+
+Result:
+
+```text
+summary: docs/perf-stage-summary-healthy-makers-20260630-081630.md
+final_poll target=240: 1346 fills in 31s = 43.4 TPS
+healthy_makers target=240: 1050 fills in 31s = 33.8 TPS
+healthy maker pool selected 30/150
+health_maker_skipped=120
+healthy_makers errors={}
+healthy taker avg latency=837.6ms
+healthy taker sign avg=2.6ms
+healthy taker in-flight wait avg=865.5ms
+```
+
+Profile:
+
+```text
+profile: /tmp/perf-stage-healthy_makers-20260630-081630.pprof.pb.gz
+Sequencer.createBlock: 19.30s / 77.11% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.24s / 76.87% cum
+OrderBook.SnapshotDirtyTracking: 17.46s / 69.76% cum
+book.copyBoolMap: 17.46s / 69.76% cum
+SubmitTransaction: 0.61s / 2.44% cum
+```
+
+Interpretation:
+
+```text
+Selecting healthier makers removes margin errors but reduces fill throughput
+and raises taker wait latency. It is not the max-TPS path. The clean maker set
+still spends most core CPU in sequencing and dirty snapshot copy/hash work, so
+the remaining ceiling is not explained by local account selection alone.
+```

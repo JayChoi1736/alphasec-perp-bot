@@ -585,3 +585,43 @@ Filtering prep-failed makers is useful diagnostics and keeps dirty accounts out
 of a run, but it did not improve max TPS. The dominant bottleneck remains core
 sequencing plus dirty snapshot copy/hash work.
 ```
+
+## Healthy Maker Pool Rejection
+
+The first 30 makers are heavily polluted with residual positions, so the
+loadgen now has an optional maker pool selector:
+
+```text
+code: MATCH_MAKER_POOL_COUNT, MATCH_HEALTHY_MAKER_MIN_FREE, MATCH_HEALTHY_MAKER_MAX_ABS_POS
+stage: healthy_makers
+default behavior: unchanged unless the env vars are set
+```
+
+Measured result:
+
+```text
+summary: docs/perf-stage-summary-healthy-makers-20260630-081630.md
+final_poll target=240: 43.4 TPS
+healthy_makers target=240: 33.8 TPS
+selected makers: 30/150
+health_maker_skipped=120
+healthy_makers errors={}
+```
+
+Profile from `healthy_makers`:
+
+```text
+Sequencer.createBlock: 19.30s / 77.11% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.24s / 76.87% cum
+OrderBook.SnapshotDirtyTracking: 17.46s / 69.76% cum
+book.copyBoolMap: 17.46s / 69.76% cum
+SubmitTransaction: 0.61s / 2.44% cum
+```
+
+Conclusion:
+
+```text
+Healthy maker selection is useful for proving that margin errors are not the
+primary throughput ceiling. It removes errors but lowers filled TPS and keeps
+the profile dominated by core sequencing plus dirty snapshot copy/hash work.
+```

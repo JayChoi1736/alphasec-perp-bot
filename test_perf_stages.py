@@ -249,6 +249,15 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(env["MATCH_INVENTORY_CAP"], "1.0")
         self.assertEqual(env["MATCH_SKIP_PREP_FAILED"], "1")
 
+    def test_healthy_makers_stage_selects_from_larger_pool(self):
+        env = stage_env("healthy_makers")
+
+        self.assertEqual(env["MATCH_POSITION_POLL_MODE"], "final")
+        self.assertEqual(env["MATCH_INVENTORY_CAP"], "1.0")
+        self.assertEqual(env["MATCH_MAKER_POOL_COUNT"], "150")
+        self.assertEqual(env["MATCH_HEALTHY_MAKER_MIN_FREE"], "500")
+        self.assertEqual(env["MATCH_HEALTHY_MAKER_MAX_ABS_POS"], "0.02")
+
 
 if __name__ == "__main__":
     unittest.main()

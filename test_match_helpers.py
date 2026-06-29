@@ -29,6 +29,7 @@ from match import (
     record_latency,
     role_account_counts,
     role_deposit_targets,
+    select_healthy_accounts,
     stagger_delay,
     summary_counts,
     submit_success_counter,
@@ -159,6 +160,38 @@ class MatchHelperTest(unittest.TestCase):
         self.assertEqual(kept, ["a0"])
         self.assertEqual(skipped, 3)
 
+    def test_select_healthy_accounts_prefers_low_position_high_free_margin(self):
+        accounts = ["a0", "a1", "a2", "a3"]
+        health = [
+            {"free": 1000.0, "position": 0.02},
+            {"free": 2000.0, "position": 0.0},
+            {"free": 100.0, "position": 0.0},
+            {"free": 1500.0, "position": -0.001},
+        ]
+
+        selected, skipped = select_healthy_accounts(
+            accounts,
+            health,
+            limit=2,
+            min_free=500.0,
+            max_abs_pos=0.01,
+        )
+
+        self.assertEqual(selected, ["a1", "a3"])
+        self.assertEqual(skipped, 2)
+
+    def test_select_healthy_accounts_ignores_failed_health_reads(self):
+        selected, skipped = select_healthy_accounts(
+            ["a0", "a1"],
+            [RuntimeError("rpc failed"), {"free": 1000.0, "position": 0.0}],
+            limit=1,
+            min_free=500.0,
+            max_abs_pos=0.01,
+        )
+
+        self.assertEqual(selected, ["a1"])
+        self.assertEqual(skipped, 1)
+
     def test_tx_hex_keeps_single_prefix(self):
         self.assertEqual(tx_hex(bytes.fromhex("abcd")), "0xabcd")
 
@@ -187,6 +220,7 @@ class MatchHelperTest(unittest.TestCase):
                 "maker_cooldown": 0,
                 "maker_cooldown_skipped": 0,
                 "prep_skipped": 0,
+                "health_maker_skipped": 0,
             },
         )
 

@@ -139,6 +139,23 @@ def filter_prepped_accounts(accounts, prep_results, skip_failed):
     return kept, skipped
 
 
+def select_healthy_accounts(accounts, health_results, limit, min_free, max_abs_pos):
+    candidates = []
+    for account, health in zip(accounts, health_results):
+        if isinstance(health, Exception):
+            continue
+        free = float(health.get("free", 0.0))
+        position = float(health.get("position", 0.0))
+        abs_pos = abs(position)
+        if free < min_free or abs_pos > max_abs_pos:
+            continue
+        candidates.append((abs_pos, -free, account))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    selected = [account for _, _, account in candidates[:limit]]
+    skipped = len(accounts) - len(selected)
+    return selected, skipped
+
+
 def choose_direction(position, cap, previous_direction):
     if position >= cap:
         return SELL
@@ -227,6 +244,7 @@ def summary_counts(stats):
         "maker_cooldown",
         "maker_cooldown_skipped",
         "prep_skipped",
+        "health_maker_skipped",
     )
     return {key: stats.get(key, 0) for key in keys}
 
@@ -472,6 +490,19 @@ def position_size_from_positions(positions, market_id):
         if int(item["marketId"]) == market_id:
             return _to_int(item["size"]) / 1e18
     return 0.0
+
+
+def account_health(account, market_id):
+    perp_account = account.perp_account() or {}
+    wallet = _to_int(perp_account.get("walletBalance")) / 1e18
+    order_margin = _to_int(perp_account.get("orderMargin")) / 1e18
+    position = position_size_from_positions(account.positions() or [], market_id)
+    return {
+        "wallet": wallet,
+        "order_margin": order_margin,
+        "free": wallet - order_margin,
+        "position": position,
+    }
 
 
 async def account_position(rpc, address, market_id):
@@ -728,6 +759,16 @@ async def amain():
         maker_override=os.environ.get("MATCH_MAKER_COUNT"),
         taker_override=os.environ.get("MATCH_TAKER_COUNT"),
     )
+    maker_pool_count = env_int("MATCH_MAKER_POOL_COUNT", cfg.get("maker_pool_count", maker_count))
+    healthy_maker_min_free = env_float(
+        "MATCH_HEALTHY_MAKER_MIN_FREE",
+        cfg.get("healthy_maker_min_free", 0.0),
+    )
+    healthy_maker_max_abs_pos = env_float(
+        "MATCH_HEALTHY_MAKER_MAX_ABS_POS",
+        cfg.get("healthy_maker_max_abs_pos", 1e9),
+    )
+    maker_pool_count = max(maker_count, maker_pool_count)
 
     worker_index = env_int("MATCH_WORKER_INDEX", 0)
     worker_count = env_int("MATCH_WORKER_COUNT", 1)
@@ -786,20 +827,60 @@ async def amain():
     taker_sell = max(math.ceil(low / tick) * tick + tick, quantize(mark * (1 - slip)))
 
     keystore = cfg.get("keystore", "accounts.json")
-    all_makers = load_or_create(keystore, "maker", maker_count)
+    all_makers = load_or_create(keystore, "maker", maker_pool_count)
     all_takers = load_or_create(keystore, "taker", taker_count)
-    worker_makers = all_makers[maker_start:maker_end]
     worker_takers = all_takers[taker_start:taker_end]
-    makers = [
-        PerpDexClient(
-            cfg["rpc_url"],
-            item["key"],
-            cfg["dex_address"],
-            session=web3_session,
-            request_kwargs=web3_request_kwargs,
+    health_filter_enabled = (
+        maker_pool_count > maker_count
+        or healthy_maker_min_free > 0
+        or healthy_maker_max_abs_pos < 1e9
+    )
+    health_maker_skipped = 0
+    if health_filter_enabled:
+        maker_candidates = [
+            PerpDexClient(
+                cfg["rpc_url"],
+                item["key"],
+                cfg["dex_address"],
+                session=web3_session,
+                request_kwargs=web3_request_kwargs,
+            )
+            for item in all_makers
+        ]
+        maker_health = await gather_limited(
+            maker_candidates,
+            setup_concurrency,
+            lambda account: asyncio.to_thread(account_health, account, market_id),
         )
-        for item in worker_makers
-    ]
+        selected_makers, health_maker_skipped = select_healthy_accounts(
+            maker_candidates,
+            maker_health,
+            maker_count,
+            healthy_maker_min_free,
+            healthy_maker_max_abs_pos,
+        )
+        if len(selected_makers) < maker_count:
+            raise RuntimeError(
+                f"only {len(selected_makers)} healthy makers available, need {maker_count}"
+            )
+        makers = selected_makers[maker_start:maker_end]
+        print(
+            f"healthy maker pool selected {len(selected_makers)}/{maker_pool_count} "
+            f"(skipped={health_maker_skipped}, min_free={healthy_maker_min_free}, "
+            f"max_abs_pos={healthy_maker_max_abs_pos})"
+        )
+    else:
+        worker_makers = all_makers[maker_start:maker_end]
+        makers = [
+            PerpDexClient(
+                cfg["rpc_url"],
+                item["key"],
+                cfg["dex_address"],
+                session=web3_session,
+                request_kwargs=web3_request_kwargs,
+            )
+            for item in worker_makers
+        ]
     takers = [
         PerpDexClient(
             cfg["rpc_url"],
@@ -826,6 +907,9 @@ async def amain():
         f"account_inflight={account_inflight} maker_guard={maker_guard} poll_mode={position_poll_mode} "
         f"maker_error_cooldown={maker_error_cooldown_threshold}/{maker_error_cooldown_sec}s "
         f"skip_prep_failed={skip_prep_failed} "
+        f"maker_pool={maker_pool_count} "
+        f"healthy_maker_min_free={healthy_maker_min_free} "
+        f"healthy_maker_max_abs_pos={healthy_maker_max_abs_pos} "
         f"maker_deposit={maker_deposit} taker_deposit={taker_deposit} "
         f"nonce_mode={nonce_mode} "
         f"guard_min_bid={maker_guard_min_bid} guard_min_ask={maker_guard_min_ask} "
@@ -887,6 +971,7 @@ async def amain():
     stop = asyncio.Event()
     stats = Counter()
     stats["prep_skipped"] = skipped_makers + skipped_takers
+    stats["health_maker_skipped"] = health_maker_skipped
     samples = {}
     local_target = target / worker_count
     interval = local_taker_count / local_target if local_target > 0 and local_taker_count > 0 else 1
@@ -1059,6 +1144,7 @@ async def amain():
             f"maker_cooldown={counts['maker_cooldown']} "
             f"maker_cooldown_skipped={counts['maker_cooldown_skipped']} "
             f"prep_skipped={counts['prep_skipped']} "
+            f"health_maker_skipped={counts['health_maker_skipped']} "
             f"book_guard_ok={stats.get('book_guard_ok', 0)} "
             f"errors={error_summary} latency_avg_ms={latency_avg_ms} latency={latency} samples={samples} "
             f"final taker_inv range [{min(inv):+.4f},{max(inv):+.4f}]"

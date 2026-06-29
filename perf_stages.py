@@ -117,6 +117,19 @@ STAGES = {
             "MATCH_SKIP_PREP_FAILED": "1",
         },
     },
+    "healthy_makers": {
+        "description": "final-only polling with makers selected from a healthy account pool",
+        "env": {
+            "MATCH_NONCE_MODE": "normal",
+            "MATCH_ACCOUNT_INFLIGHT": "1",
+            "MATCH_MAKER_GUARD": "0",
+            "MATCH_POSITION_POLL_MODE": "final",
+            "MATCH_INVENTORY_CAP": "1.0",
+            "MATCH_MAKER_POOL_COUNT": "150",
+            "MATCH_HEALTHY_MAKER_MIN_FREE": "500",
+            "MATCH_HEALTHY_MAKER_MAX_ABS_POS": "0.02",
+        },
+    },
 }
 
 
