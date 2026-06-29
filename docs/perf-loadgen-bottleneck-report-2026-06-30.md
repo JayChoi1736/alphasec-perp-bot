@@ -1,0 +1,237 @@
+# Perf Loadgen Bottleneck Report
+
+Date: 2026-06-30 KST
+Environment: `perf`
+RPC path: `https://l2-rpc-perf.dexor.trade`
+Scope: local `alphasec-perp-bot` load generator, perf core runtime config, and profiling evidence
+
+## Verdict
+
+`GOMAXPROCS=4` was a real perf-only config cap. Removing it and matching prod runtime env behavior raised the best observed filled IOC throughput from `74.0` to `146.7` trades/s.
+
+After that config fix, the remaining ceiling is still core-side. The latest profile during post-change load is led by sequencer block creation and transaction sequencing. Local signing, DNS, backend whitelist/proxy, and simple account fanout are not the current primary bottlenecks.
+
+## GitOps Change
+
+Devops change pushed:
+
+```text
+repo: ../kaia-orderbook-dex-devops
+commit: f905097 perf: match core runtime env with prod
+file: charts/kaia-orderbook-dex-core/values-perf.yaml
+change: removed perf-only GOMAXPROCS=4 and GOGC=100 overrides
+```
+
+ArgoCD/live verification:
+
+```text
+ArgoCD revision: f905097f3bdf0d18b18a86971d1fe9b004287f60
+sync: Synced
+health: Healthy
+live pod env:
+  DD_ENV=perf
+  DD_SERVICE=kaia-orderbook-dex-core
+  no GOMAXPROCS
+  no GOGC
+```
+
+## Post-Change Measurements
+
+Best post-change baseline with overlapping pprof:
+
+```text
+log: /tmp/perf-post-gomax-pprof-baseline-20260630-055553.log
+profile: /tmp/core-cpu-post-gomax-20260630-055553.pb.gz
+target: 300 trades/s
+duration: 45s
+result: 6756 fills in 46s = 146.7 trades/s
+taker submit: 6849
+maker submit: 4222
+taker avg send latency: 182.7ms
+maker avg send latency: 170.3ms
+taker signing avg latency: 2.6ms
+taker in-flight wait avg: 223.7ms
+```
+
+Staged retest summary:
+
+```text
+summary: docs/perf-stage-summary-after-gomaxprod-2026-06-30.md
+baseline: 2815 fills in 21s = 134.0 trades/s
+wide_accounts: 2105 fills in 21s = 99.3 trades/s
+```
+
+The earlier immediate post-change baseline also reached:
+
+```text
+log: /tmp/perf-stage-baseline-20260630-054748.log
+result: 3038 fills in 21s = 144.3 trades/s
+```
+
+## Post-Change CPU Profile
+
+Profile captured during the `146.7` trades/s run:
+
+```text
+profile: /tmp/core-cpu-post-gomax-20260630-055553.pb.gz
+duration: 20.07s
+total samples: 16.23s
+```
+
+Relevant `go tool pprof -top -cum -nodefraction=0` lines:
+
+```text
+7.43s 45.78% github.com/kaiachain/kaia-orderbook-dex-core/execution/gethexec.(*Sequencer).createBlock
+7.27s 44.79% github.com/kaiachain/kaia-orderbook-dex-core/execution/gethexec.(*ExecutionEngine).sequenceTransactionsWithBlockMutex
+2.57s 15.83% github.com/ethereum/go-ethereum/core/perp/v1/book.(*OrderBook).SnapshotDirtyTracking
+2.57s 15.83% github.com/ethereum/go-ethereum/core/perp/v1/book.copyBoolMap
+2.20s 13.56% github.com/ethereum/go-ethereum/internal/ethapi.SubmitTransaction
+1.91s 11.77% runtime.mapassign_faststr
+1.07s  6.59% aeshashbody
+```
+
+Interpretation:
+
+```text
+After removing the scheduler cap, dirty snapshot copy is less dominant than before,
+but the largest cumulative path is still core sequencer block creation and transaction sequencing.
+SubmitTransaction is visible now, but it remains below the sequencer path.
+Local signing stays around 2.5-2.7ms and is not the throughput ceiling.
+```
+
+## Pre-Change CPU Profile
+
+Before the runtime env change, the profile was more heavily dominated by dirty order snapshot copying:
+
+```text
+profile: /tmp/core-cpu-filled-20260630-042410.pb.gz
+duration: 30.18s
+total samples: 38.73s
+
+29.85s 77.07% gethexec.(*Sequencer).createBlock
+29.79s 76.92% ExecutionEngine.sequenceTransactionsWithBlockMutex
+26.78s 69.15% book.(*OrderBook).SnapshotDirtyTracking
+26.77s 69.12% book.copyBoolMap
+13.02s 33.62% aeshashbody
+ 7.28s 18.80% runtime.mapassign_faststr
+ 1.43s  3.69% internal/ethapi.SubmitTransaction
+```
+
+Core source locations matching the profile:
+
+```text
+../kaia-orderbook-dex-core/go-ethereum/core/perp/v1/book/orderbook.go
+- dirtyOrders/deletedOrders are string-keyed maps.
+- SnapshotDirtyTracking copies those maps at snapshot/block boundaries.
+- copyBoolMap creates a new map and assigns every string key.
+
+../kaia-orderbook-dex-core/go-ethereum/core/perp/v1/dispatcher/perp_dispatcher_snapshot.go
+- GetOrderDeltaAndReset collects dirty/deleted order state from engines and resets tracking.
+
+../kaia-orderbook-dex-core/go-ethereum/core/perp/v1/engine/perp_symbol_engine_dirty.go
+- dirtyOrderIDs/deletedOrderIDs are string-keyed sets.
+```
+
+## Exclusions
+
+Local signing is not the bottleneck:
+
+```text
+post-change baseline signing: 2.6ms
+wide_accounts signing: 2.5ms
+```
+
+Account fanout did not raise filled TPS:
+
+```text
+wide_accounts:
+  makers=40
+  takers=300
+  MATCH_PER_ACCOUNT_TPS=1
+  MATCH_ACCOUNT_INFLIGHT=1
+  result=99.3 trades/s
+  taker avg send latency=1311.6ms
+  taker in-flight wait avg=1258.6ms
+```
+
+Backend whitelist/proxy is not on this test path:
+
+```text
+loadgen RPC: https://l2-rpc-perf.dexor.trade
+devops mapping: perf-core-http-neg, port 8547
+backend RPC proxy: l2-sequencer-perf.dexor.trade, port 8545
+```
+
+DNS is not supported by the profiles as the primary limiter. The hot samples are inside core execution, and the load generator can repeatedly reach 130-146 trades/s through the NEG host.
+
+## Local Loadgen Changes
+
+Relevant local bot changes:
+
+```text
+match.py
+- async aiohttp JSON-RPC hot path
+- shared Web3 setup session
+- latency counters for send/sign/in-flight wait
+- separate maker/taker account fanout controls
+- nonce mode support
+- cancellation-safe taker in-flight task cleanup
+
+perf_stages.py
+- staged baseline/wide runner
+- markdown summary output
+- stage timeout guard so a hung subprocess cannot block the whole run
+- optional `--pprof-url` capture that starts after the load generator prints `ready`
+- raw pprof profile path included in summary output
+- optional `--target-sweep` to run the same stages across multiple target TPS values without log collisions
+
+dex.py
+- reusable signing path with cached chain metadata
+- shared Web3 session support
+```
+
+## Current Max TPS
+
+Current best observed filled IOC throughput:
+
+```text
+146.7 trades/s
+```
+
+This is about `1.98x` the previous best `74.0 trades/s` measured while perf had `GOMAXPROCS=4`.
+
+## Next Bottleneck Work
+
+Highest impact:
+
+```text
+1. Core transaction sequencing/block creation path.
+2. Core dirty order snapshot/copy path, especially string-key map copy/hash/assignment.
+3. SubmitTransaction/RPC admission path after the above is reduced.
+```
+
+Load generator work remaining:
+
+```text
+1. Add a maker-liquidity guard stage that avoids avoidable insufficient-margin churn.
+2. Keep staged runs on direct NEG RPC unless explicitly testing backend proxy behavior.
+3. Use `--target-sweep` for longer max-search runs after each core/config change.
+```
+
+## Verification
+
+Commands run:
+
+```text
+helm template perf-kaia-orderbook-dex-core charts/kaia-orderbook-dex-core -f charts/kaia-orderbook-dex-core/values-perf.yaml
+kubectl -n argocd get application perf-kaia-orderbook-dex-core
+kubectl -n kaia-dex-perf exec perf-kaia-orderbook-dex-core-nitro-0 -- printenv
+.venv/bin/python -m unittest test_match_helpers.py test_encode.py test_perf_stages.py -q
+.venv/bin/python -m py_compile match.py dex.py accounts.py perf_stages.py test_match_helpers.py test_perf_stages.py
+go tool pprof -top -cum -nodefraction=0 /tmp/core-cpu-post-gomax-20260630-055553.pb.gz
+.venv/bin/python perf_stages.py --config config.perf.json --target 120 --duration 8 --stages baseline --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-stages baseline --pprof-seconds 3 --summary /tmp/perf-stage-summary-pprof-smoke-20260630.md --stage-timeout 120
+go tool pprof -top -cum -nodefraction=0 /tmp/perf-stage-baseline-20260630-060150.pprof.pb.gz
+.venv/bin/python perf_stages.py --config config.perf.json --target-sweep 80,120 --duration 5 --stages baseline --summary /tmp/perf-stage-summary-target-sweep-smoke-20260630.md --stage-timeout 120
+```
+
+No core code changes were made.

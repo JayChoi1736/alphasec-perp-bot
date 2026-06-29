@@ -85,10 +85,25 @@ def _to_int(v):
 
 
 class PerpDexClient:
-    def __init__(self, rpc_url, private_key, dex_address=DEX_ADDRESS, gas_limit=500000):
+    def __init__(
+        self,
+        rpc_url,
+        private_key,
+        dex_address=DEX_ADDRESS,
+        gas_limit=500000,
+        session=None,
+        request_kwargs=None,
+    ):
         from web3 import Web3
         from eth_account import Account
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+        self.w3 = Web3(
+            Web3.HTTPProvider(
+                rpc_url,
+                session=session,
+                request_kwargs=request_kwargs or {"timeout": 15},
+            )
+        )
         self.acct = Account.from_key(private_key)
         self.address = self.acct.address
         self.dex = Web3.to_checksum_address(dex_address)
@@ -108,6 +123,27 @@ class PerpDexClient:
 
     def resync_nonce(self):
         self._nonce = self.w3.eth.get_transaction_count(self.address, "pending")
+
+    def sign_dex_tx(self, cmd_byte, payload, nonce=None, chain_id=None, gas_price=None):
+        if nonce is None:
+            if self._nonce is None:
+                self.prime()
+            nonce = self._nonce
+            self._nonce = nonce + 1
+        if chain_id is None:
+            chain_id = self._chain_id
+        if gas_price is None:
+            gas_price = self._gas_price
+        tx = {
+            "to": self.dex,
+            "data": encode_dex_input(cmd_byte, payload),
+            "gas": self.gas_limit,
+            "nonce": nonce,
+            "chainId": chain_id,
+            "gasPrice": gas_price,
+            "value": 0,
+        }
+        return self.acct.sign_transaction(tx).raw_transaction
 
     def _send(self, cmd_byte, payload, wait=True):
         """wait=True: node nonce + block on receipt (setup). wait=False: local
