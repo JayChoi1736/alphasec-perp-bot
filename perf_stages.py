@@ -147,6 +147,23 @@ def parse_done_line(line):
     for counter in COUNTER_RE.finditer(rest):
         parsed[counter.group("key")] = int(counter.group("value"))
 
+    errors_marker = "errors="
+    if errors_marker in rest:
+        start = rest.index(errors_marker) + len(errors_marker)
+        end = rest.find(" latency_avg_ms=", start)
+        if end == -1:
+            end = rest.find(" latency=", start)
+        if end == -1:
+            end = rest.find(" samples=", start)
+        if end == -1:
+            end = len(rest)
+        try:
+            value = ast.literal_eval(rest[start:end].strip())
+            if isinstance(value, dict):
+                parsed["errors"] = value
+        except (SyntaxError, ValueError):
+            parsed["errors_parse_error"] = rest[start:end].strip()
+
     marker = "latency_avg_ms="
     if marker in rest:
         start = rest.index(marker) + len(marker)
@@ -340,6 +357,12 @@ def aggregate_worker_results(stage_name, target, worker_results):
     for key in AGGREGATE_COUNTERS:
         if any(key in worker for worker in worker_results):
             result[key] = sum(int(worker.get(key, 0)) for worker in worker_results)
+    if any("errors" in worker for worker in worker_results):
+        errors = {}
+        for worker in worker_results:
+            for key, value in worker.get("errors", {}).items():
+                errors[key] = errors.get(key, 0) + int(value)
+        result["errors"] = errors
     elapsed_values = [worker.get("elapsed_s") for worker in worker_results if worker.get("elapsed_s") is not None]
     if elapsed_values:
         result["elapsed_s"] = max(elapsed_values)
@@ -353,6 +376,12 @@ def aggregate_worker_results(stage_name, target, worker_results):
 
 def result_failed(result):
     return bool(result.get("timed_out")) or int(result.get("exit_code", 0) or 0) != 0
+
+
+def format_errors(errors):
+    if not errors:
+        return ""
+    return ", ".join(f"{key}={value}" for key, value in sorted(errors.items()))
 
 
 def run_stage_workers(
@@ -651,15 +680,16 @@ def write_summary(results, path):
     lines = [
         "# Perf Stage Summary",
         "",
-        "| Stage | Target | TPS | Fills | Taker Submit | Maker Submit | Taker ms | Taker sign ms | Wait ms | Log | Profile |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "| Stage | Target | Workers | TPS | Fills | Taker Submit | Maker Submit | Taker ms | Taker sign ms | Wait ms | Errors | Log | Profile |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for result in results:
         lat = result.get("latency_avg_ms", {})
         lines.append(
-            "| {stage} | {target} | {tps} | {fills} | {taker} | {maker} | {taker_ms} | {sign_ms} | {wait_ms} | {log} | {profile} |".format(
+            "| {stage} | {target} | {workers} | {tps} | {fills} | {taker} | {maker} | {taker_ms} | {sign_ms} | {wait_ms} | {errors} | {log} | {profile} |".format(
                 stage=result.get("stage", ""),
                 target=result.get("target", ""),
+                workers=result.get("worker_count", 1),
                 tps=result.get("trades_s", ""),
                 fills=result.get("fills", ""),
                 taker=result.get("taker_submit_ok", ""),
@@ -667,6 +697,7 @@ def write_summary(results, path):
                 taker_ms=lat.get("taker", ""),
                 sign_ms=lat.get("taker_sign", ""),
                 wait_ms=lat.get("taker_inflight_wait", ""),
+                errors=format_errors(result.get("errors", {})),
                 log=result.get("log", ""),
                 profile=result.get("pprof_profile", ""),
             )

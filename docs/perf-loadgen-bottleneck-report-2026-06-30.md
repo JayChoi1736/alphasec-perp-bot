@@ -694,3 +694,45 @@ but scaling stops by workers=4. This is a loadgen robustness improvement, not
 a new ceiling. The remaining limiter is still core-side sequencing/snapshot
 work, with local signing staying around 2.5-3.3ms.
 ```
+
+## Workers=2 Clean Ceiling Update
+
+Latest staged sweep:
+
+```text
+summary: docs/perf-stage-summary-workers2-sweep-20260630-084027.md
+workers=2 target=240: 39.8 TPS, errors={}
+workers=2 target=300: 42.0 TPS, errors={}
+workers=2 target=360: 42.6 TPS, maker_error:insufficient_margin=53
+workers=2 target=420: 42.3 TPS, maker_error:insufficient_margin=54
+```
+
+Clean profile run:
+
+```text
+summary: docs/perf-stage-summary-workers2-clean-pprof-20260630-084342.md
+workers=2 target=300: 40.9 TPS, errors={}
+taker avg=877.3ms, sign avg=3.2ms, wait avg=905.5ms
+profile: /tmp/perf-stage-final_poll-20260630-084342.pprof.pb.gz
+```
+
+Profile:
+
+```text
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.65s / 75.75% cum
+OrderBook.SnapshotDirtyTracking: 17.88s / 68.93% cum
+book.copyBoolMap: 17.88s / 68.93% cum
+SendRawTransaction: 0.65s / 2.51% cum
+SubmitTransaction: 0.58s / 2.24% cum
+PublishTransaction: 0.58s / 2.24% cum
+```
+
+Updated bottleneck call:
+
+```text
+Current degraded-state clean max is workers=2 target=300 at 42.0 TPS. The
+slightly higher 360/420 target results are dirty because maker insufficient
+margin appears. Increasing target mostly increases wait and error pressure.
+The clean profile still points to core sequencing and order snapshot copy/hash
+work as the primary bottleneck; local signing and RPC admission are secondary.
+```

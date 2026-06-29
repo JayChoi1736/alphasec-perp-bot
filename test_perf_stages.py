@@ -45,8 +45,20 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(parsed["maker_submit_ok"], 1079)
         self.assertEqual(parsed["maker_cooldown"], 2)
         self.assertEqual(parsed["maker_cooldown_skipped"], 3)
+        self.assertEqual(parsed["errors"], {})
         self.assertEqual(parsed["latency_avg_ms"]["taker"], 971.7)
         self.assertEqual(parsed["latency_avg_ms"]["taker_inflight_wait"], 1006.8)
+
+    def test_parse_done_line_extracts_error_map(self):
+        line = (
+            "DONE: 645 fills in 31s = 20.8 trades/s; "
+            "submit_ok=1208 errors={'maker_error:insufficient_margin': 53} "
+            "latency_avg_ms={'taker': 984.6}"
+        )
+
+        parsed = parse_done_line(line)
+
+        self.assertEqual(parsed["errors"], {"maker_error:insufficient_margin": 53})
 
     def test_parse_done_text_uses_last_done_line(self):
         text = "\n".join(
@@ -220,6 +232,35 @@ class PerfStagesTest(unittest.TestCase):
         self.assertIn("| baseline | 300.0 |", text)
         self.assertIn("/tmp/profile.pb.gz", text)
 
+
+    def test_write_summary_includes_workers_and_errors(self):
+        with TemporaryDirectory() as tmp:
+            path = f"{tmp}/summary.md"
+            write_summary(
+                [
+                    {
+                        "stage": "final_poll",
+                        "target": 360.0,
+                        "worker_count": 2,
+                        "trades_s": 42.6,
+                        "fills": 1323,
+                        "taker_submit_ok": 1305,
+                        "maker_submit_ok": 1215,
+                        "errors": {"maker_error:insufficient_margin": 53},
+                        "latency_avg_ms": {"taker": 992.4},
+                        "log": "/tmp/load-w*.log",
+                    }
+                ],
+                path,
+            )
+
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+
+        self.assertIn("| Workers |", text)
+        self.assertIn("| Errors |", text)
+        self.assertIn("| final_poll | 360.0 | 2 | 42.6 |", text)
+        self.assertIn("maker_error:insufficient_margin=53", text)
 
     def test_prepare_stage_config_writes_fresh_keystore_config(self):
         with TemporaryDirectory() as tmp:

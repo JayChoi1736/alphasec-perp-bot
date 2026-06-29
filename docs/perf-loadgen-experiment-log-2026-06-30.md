@@ -578,3 +578,61 @@ core/RPC sequencing wait dominates. Keep --workers for reproducible fanout
 experiments; current best clean runner setting in this degraded account/core
 state is workers=2 at 41.6 TPS.
 ```
+
+## Workers=2 Target Sweep and Clean Profile
+
+Loadgen change:
+
+```text
+perf_stages.py: parse DONE errors={...}, aggregate worker error maps, and show Workers/Errors columns in stage summaries.
+```
+
+Sweep command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target-sweep 240,300,360,420 --duration 30 --stages final_poll --workers 2 --log-dir /tmp --summary docs/perf-stage-summary-workers2-sweep-20260630-084027.md --stage-timeout 180 --env MATCH_INVENTORY_CAP=1.0
+```
+
+Sweep result:
+
+```text
+workers=2 target=240: 39.8 TPS, errors={}
+workers=2 target=300: 42.0 TPS, errors={}
+workers=2 target=360: 42.6 TPS, maker_error:insufficient_margin=53
+workers=2 target=420: 42.3 TPS, maker_error:insufficient_margin=54
+```
+
+Clean profile command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 30 --stages final_poll --workers 2 --log-dir /tmp --summary docs/perf-stage-summary-workers2-clean-pprof-20260630-084342.md --stage-timeout 180 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages final_poll --env MATCH_INVENTORY_CAP=1.0
+```
+
+Clean profile result:
+
+```text
+workers=2 target=300: 1269 fills in 31s = 40.9 TPS, errors={}
+taker avg=877.3ms, taker sign avg=3.2ms, wait avg=905.5ms
+profile: /tmp/perf-stage-final_poll-20260630-084342.pprof.pb.gz
+```
+
+Profile:
+
+```text
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.65s / 75.75% cum
+OrderBook.SnapshotDirtyTracking: 17.88s / 68.93% cum
+book.copyBoolMap: 17.88s / 68.93% cum
+SendRawTransaction: 0.65s / 2.51% cum
+SubmitTransaction: 0.58s / 2.24% cum
+PublishTransaction: 0.58s / 2.24% cum
+```
+
+Interpretation:
+
+```text
+Current degraded-state clean max is workers=2 target=300 at 42.0 TPS from the
+sweep. Higher targets do not produce a clean higher max; they add maker margin
+errors and higher wait. The clean profile again keeps most CPU in core
+sequencing plus dirty snapshot copy/hash work, while local signing remains
+~3ms and SubmitTransaction/RPC admission remains around 2-3% cum.
+```
