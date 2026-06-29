@@ -242,6 +242,13 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(env["MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD"], "2")
         self.assertEqual(env["MATCH_MAKER_ERROR_COOLDOWN_SEC"], "10")
 
+    def test_healthy_accounts_stage_skips_failed_prep_accounts(self):
+        env = stage_env("healthy_accounts")
+
+        self.assertEqual(env["MATCH_POSITION_POLL_MODE"], "final")
+        self.assertEqual(env["MATCH_INVENTORY_CAP"], "1.0")
+        self.assertEqual(env["MATCH_SKIP_PREP_FAILED"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

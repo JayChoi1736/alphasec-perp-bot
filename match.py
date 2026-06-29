@@ -125,6 +125,20 @@ def position_poll_items(accounts, taker_offset):
     return list(enumerate(accounts[taker_offset:], start=taker_offset))
 
 
+def filter_prepped_accounts(accounts, prep_results, skip_failed):
+    if not skip_failed:
+        return list(accounts), 0
+    kept = []
+    skipped = 0
+    for account, result in zip(accounts, prep_results):
+        if result is True:
+            kept.append(account)
+        else:
+            skipped += 1
+    skipped += max(0, len(accounts) - len(prep_results))
+    return kept, skipped
+
+
 def choose_direction(position, cap, previous_direction):
     if position >= cap:
         return SELL
@@ -212,6 +226,7 @@ def summary_counts(stats):
         "cancel_ok",
         "maker_cooldown",
         "maker_cooldown_skipped",
+        "prep_skipped",
     )
     return {key: stats.get(key, 0) for key in keys}
 
@@ -701,6 +716,7 @@ async def amain():
         "MATCH_MAKER_ERROR_COOLDOWN_SEC",
         cfg.get("maker_error_cooldown_sec", 0.0),
     )
+    skip_prep_failed = env_int("MATCH_SKIP_PREP_FAILED", cfg.get("skip_prep_failed", 0)) != 0
     cap = env_float("MATCH_INVENTORY_CAP", cfg.get("inventory_cap", 0.5))
     spread = float(cfg.get("spread", 0.0005))
     slip = float(cfg.get("taker_slippage", 0.01))
@@ -809,6 +825,7 @@ async def amain():
         f"maker_refresh_sec={maker_refresh_sec} maker_stagger={maker_stagger} "
         f"account_inflight={account_inflight} maker_guard={maker_guard} poll_mode={position_poll_mode} "
         f"maker_error_cooldown={maker_error_cooldown_threshold}/{maker_error_cooldown_sec}s "
+        f"skip_prep_failed={skip_prep_failed} "
         f"maker_deposit={maker_deposit} taker_deposit={taker_deposit} "
         f"nonce_mode={nonce_mode} "
         f"guard_min_bid={maker_guard_min_bid} guard_min_ask={maker_guard_min_ask} "
@@ -821,6 +838,7 @@ async def amain():
         ensure_funded(dev, active_takers, gas_eth=gas_eth, deposit=taker_deposit)
 
     def prep(account):
+        ok = True
         for fn in (
             lambda: account.cancel_all(market_id),
             lambda: account.set_leverage(market_id, lev),
@@ -828,10 +846,32 @@ async def amain():
             try:
                 fn()
             except Exception as exc:
+                ok = False
                 print("prep warn", account.address[:10], exc)
         account.prime()
+        return ok
 
-    await gather_limited(accounts, setup_concurrency, lambda account: asyncio.to_thread(prep, account))
+    maker_prep_results = await gather_limited(
+        active_makers,
+        setup_concurrency,
+        lambda account: asyncio.to_thread(prep, account),
+    )
+    taker_prep_results = await gather_limited(
+        active_takers,
+        setup_concurrency,
+        lambda account: asyncio.to_thread(prep, account),
+    )
+    active_makers, skipped_makers = filter_prepped_accounts(active_makers, maker_prep_results, skip_prep_failed)
+    active_takers, skipped_takers = filter_prepped_accounts(active_takers, taker_prep_results, skip_prep_failed)
+    if skip_prep_failed and (skipped_makers or skipped_takers):
+        print(f"prep filtered accounts: makers={skipped_makers} takers={skipped_takers}")
+    if "maker" in active_roles and not active_makers:
+        raise RuntimeError("no maker accounts remain after prep filtering")
+    if "taker" in active_roles and not active_takers:
+        raise RuntimeError("no taker accounts remain after prep filtering")
+    accounts = active_makers + active_takers
+    local_maker_count = len(active_makers)
+    local_taker_count = len(active_takers)
     if nonce_mode == "time":
         seed = int(time.time() * 1000)
         for account in accounts:
@@ -846,6 +886,7 @@ async def amain():
     fills = [0.0]
     stop = asyncio.Event()
     stats = Counter()
+    stats["prep_skipped"] = skipped_makers + skipped_takers
     samples = {}
     local_target = target / worker_count
     interval = local_taker_count / local_target if local_target > 0 and local_taker_count > 0 else 1
@@ -1017,6 +1058,7 @@ async def amain():
             f"cancel_ok={counts['cancel_ok']} maker_refresh_skipped={stats.get('maker_refresh_skipped', 0)} "
             f"maker_cooldown={counts['maker_cooldown']} "
             f"maker_cooldown_skipped={counts['maker_cooldown_skipped']} "
+            f"prep_skipped={counts['prep_skipped']} "
             f"book_guard_ok={stats.get('book_guard_ok', 0)} "
             f"errors={error_summary} latency_avg_ms={latency_avg_ms} latency={latency} samples={samples} "
             f"final taker_inv range [{min(inv):+.4f},{max(inv):+.4f}]"

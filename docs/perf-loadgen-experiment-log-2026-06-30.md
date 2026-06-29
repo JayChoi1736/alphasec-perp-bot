@@ -378,3 +378,55 @@ does not become the max-TPS path. It strengthens the current diagnosis: failed
 maker submit churn is a retest hygiene issue, while the throughput ceiling is
 still core sequencing plus dirty snapshot copy/hash work.
 ```
+
+## Healthy-Accounts Prep Filter Experiment
+
+Loadgen change:
+
+```text
+match.py: add MATCH_SKIP_PREP_FAILED=1 to exclude accounts that fail prep
+match.py: expose prep_skipped in DONE summary
+perf_stages.py: add healthy_accounts stage
+```
+
+Reason:
+
+```text
+prep warn uses DEX command 0x45, which is CMD_PERP_SET_LEVERAGE. Current perf
+accounts have makers that fail set leverage before load starts. This experiment
+tests whether excluding those polluted accounts recovers throughput.
+```
+
+Result:
+
+```text
+summary: docs/perf-stage-summary-healthy-accounts-20260630-080727.md
+final_poll target=240: 1461 fills in 31s = 47.1 TPS
+healthy_accounts target=240: 1448 fills in 31s = 46.6 TPS
+prep_skipped=4
+filtered accounts: makers=4, takers=0
+healthy maker insufficient-margin=46
+healthy taker avg latency=580.1ms
+healthy taker sign avg=2.6ms
+healthy taker in-flight wait avg=614.4ms
+```
+
+Profile:
+
+```text
+profile: /tmp/perf-stage-healthy_accounts-20260630-080727.pprof.pb.gz
+Sequencer.createBlock: 18.55s / 75.84% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.49s / 75.59% cum
+OrderBook.SnapshotDirtyTracking: 15.88s / 64.92% cum
+book.copyBoolMap: 15.88s / 64.92% cum
+SubmitTransaction: 0.83s / 3.39% cum
+```
+
+Interpretation:
+
+```text
+Skipping prep-failed accounts removes visibly polluted makers, but it does not
+increase filled TPS. It lowers maker liquidity slightly and the profile remains
+dominated by core sequencing and dirty snapshot copy/hash work. Keep the option
+as diagnostics/hygiene, not as the max-TPS path.
+```

@@ -11,6 +11,7 @@ from match import (
     apply_local_fill,
     active_role_names,
     choose_direction,
+    filter_prepped_accounts,
     has_book_liquidity,
     initial_taker_direction,
     latency_bucket,
@@ -140,6 +141,24 @@ class MatchHelperTest(unittest.TestCase):
     def test_position_poll_items_skip_maker_accounts(self):
         self.assertEqual(position_poll_items(["m0", "m1", "t0", "t1"], 2), [(2, "t0"), (3, "t1")])
 
+    def test_filter_prepped_accounts_keeps_all_when_disabled(self):
+        accounts = ["a0", "a1", "a2"]
+        results = [True, False, RuntimeError("prep failed")]
+
+        kept, skipped = filter_prepped_accounts(accounts, results, skip_failed=False)
+
+        self.assertEqual(kept, accounts)
+        self.assertEqual(skipped, 0)
+
+    def test_filter_prepped_accounts_skips_failed_results_when_enabled(self):
+        accounts = ["a0", "a1", "a2", "a3"]
+        results = [True, False, RuntimeError("prep failed"), None]
+
+        kept, skipped = filter_prepped_accounts(accounts, results, skip_failed=True)
+
+        self.assertEqual(kept, ["a0"])
+        self.assertEqual(skipped, 3)
+
     def test_tx_hex_keeps_single_prefix(self):
         self.assertEqual(tx_hex(bytes.fromhex("abcd")), "0xabcd")
 
@@ -167,6 +186,7 @@ class MatchHelperTest(unittest.TestCase):
                 "cancel_ok": 2,
                 "maker_cooldown": 0,
                 "maker_cooldown_skipped": 0,
+                "prep_skipped": 0,
             },
         )
 

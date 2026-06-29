@@ -106,6 +106,17 @@ STAGES = {
             "MATCH_MAKER_ERROR_COOLDOWN_SEC": "10",
         },
     },
+    "healthy_accounts": {
+        "description": "final-only polling after excluding accounts that fail prep",
+        "env": {
+            "MATCH_NONCE_MODE": "normal",
+            "MATCH_ACCOUNT_INFLIGHT": "1",
+            "MATCH_MAKER_GUARD": "0",
+            "MATCH_POSITION_POLL_MODE": "final",
+            "MATCH_INVENTORY_CAP": "1.0",
+            "MATCH_SKIP_PREP_FAILED": "1",
+        },
+    },
 }
 
 

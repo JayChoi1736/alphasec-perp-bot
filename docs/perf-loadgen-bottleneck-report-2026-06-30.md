@@ -545,3 +545,43 @@ final_poll. It is rejected as the max-TPS path. This narrows the diagnosis:
 failed maker submits are not the primary throughput ceiling; core sequencing and
 dirty snapshot copy/hash work remain the dominant bottleneck.
 ```
+
+## Prep-Failed Account Filter Rejection
+
+The repeated setup warning was traced to DEX command `0x45`, which is
+`CMD_PERP_SET_LEVERAGE`. A loadgen-only filter was added so a stage can exclude
+accounts that fail prep:
+
+```text
+code: MATCH_SKIP_PREP_FAILED=1
+stage: healthy_accounts
+default behavior: unchanged unless the env var is set
+```
+
+Measured result:
+
+```text
+summary: docs/perf-stage-summary-healthy-accounts-20260630-080727.md
+final_poll target=240: 47.1 TPS
+healthy_accounts target=240: 46.6 TPS
+prep_skipped=4
+filtered accounts: makers=4, takers=0
+```
+
+Profile from `healthy_accounts`:
+
+```text
+Sequencer.createBlock: 18.55s / 75.84% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.49s / 75.59% cum
+OrderBook.SnapshotDirtyTracking: 15.88s / 64.92% cum
+book.copyBoolMap: 15.88s / 64.92% cum
+SubmitTransaction: 0.83s / 3.39% cum
+```
+
+Conclusion:
+
+```text
+Filtering prep-failed makers is useful diagnostics and keeps dirty accounts out
+of a run, but it did not improve max TPS. The dominant bottleneck remains core
+sequencing plus dirty snapshot copy/hash work.
+```
