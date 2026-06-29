@@ -98,3 +98,49 @@ visible but lower: SubmitTransaction / RPC admission
 ```
 
 No core code changes were made.
+
+## Retest After Fresh Runner Commit
+
+Local commit:
+
+```text
+46edd1c perf: add fresh keystore stage runner options
+```
+
+Push status:
+
+```text
+git push origin main failed because current GitHub account has READ permission on JayChoi1736/alphasec-perp-bot.
+origin/main is not updated; local main is ahead by 8 commits.
+```
+
+Command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target-sweep 80,120,160 --duration 30 --stages baseline,maker_guard --log-dir /tmp --summary docs/perf-stage-summary-retest-20260630-070902.md --stage-timeout 120 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages baseline
+```
+
+Results:
+
+```text
+baseline target=80: 1209 fills in 31s = 39.0 TPS, maker insufficient-margin=50
+maker_guard target=80: 1247 fills in 31s = 40.2 TPS, maker_submit_ok=60
+baseline target=120: 1492 fills in 31s = 48.1 TPS, maker insufficient-margin=51
+maker_guard target=120: 1768 fills in 31s = 57.0 TPS, maker_submit_ok=90
+baseline target=160: 1598 fills in 31s = 51.5 TPS, maker insufficient-margin=83
+maker_guard target=160: 1630 fills in 31s = 52.6 TPS, maker_submit_ok=480
+```
+
+Profiles from baseline stages:
+
+```text
+t80: Sequencer.createBlock 67.61% cum, SequenceTransactions 67.16% cum, SnapshotDirtyTracking/copyBoolMap 56.32% cum, SubmitTransaction 3.46% cum
+t120: Sequencer.createBlock 67.68% cum, SequenceTransactions 67.27% cum, SnapshotDirtyTracking/copyBoolMap 54.05% cum, SubmitTransaction 3.90% cum
+t160: Sequencer.createBlock 66.39% cum, SequenceTransactions 66.01% cum, SnapshotDirtyTracking/copyBoolMap 54.76% cum, SubmitTransaction 4.30% cum
+```
+
+Interpretation:
+
+```text
+This retest does not replace the clean max. Highest observed was 57.0 TPS, but the current existing-account state is polluted: baseline runs still hit maker insufficient-margin, and maker_guard removes those errors by suppressing maker submissions rather than increasing clean liquidity. Core CPU profile still points at sequencer transaction sequencing and dirty order snapshot copy/hash work, not local signing or DNS.
+```

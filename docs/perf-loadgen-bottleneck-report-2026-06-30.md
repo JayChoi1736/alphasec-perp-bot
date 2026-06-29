@@ -317,3 +317,34 @@ fresh runner smoke: perf_stages.py --fresh-keystore-dir works end-to-end, measur
 ```
 
 Interpretation: the earlier clean ceiling remains the best measured max, but the current account set is not clean enough for a fair max search. A next clean run should fund the owner for fresh sub-accounts and then use the new `--fresh-keystore-dir` / `--env` runner options with a better maker sizing/depth strategy before comparing TPS again.
+
+## Retest After Fresh Runner Commit
+
+```text
+summary: docs/perf-stage-summary-retest-20260630-070902.md
+local commit: 46edd1c perf: add fresh keystore stage runner options
+push status: git push origin main blocked, viewerPermission=READ on JayChoi1736/alphasec-perp-bot
+rpc path: https://l2-rpc-perf.dexor.trade
+owner L2 ETH before retest: 0.03
+best retest result: maker_guard target=120, 1768 fills in 31s = 57.0 trades/s
+baseline target=80: 39.0 TPS, maker insufficient-margin=50
+baseline target=120: 48.1 TPS, maker insufficient-margin=51
+baseline target=160: 51.5 TPS, maker insufficient-margin=83
+maker_guard target=80: 40.2 TPS, maker_submit_ok=60
+maker_guard target=120: 57.0 TPS, maker_submit_ok=90
+maker_guard target=160: 52.6 TPS, maker_submit_ok=480
+```
+
+Latest profile evidence from the retest:
+
+```text
+t80 baseline: Sequencer.createBlock 67.61% cum, SequenceTransactions 67.16% cum, SnapshotDirtyTracking/copyBoolMap 56.32% cum, SubmitTransaction 3.46% cum
+t120 baseline: Sequencer.createBlock 67.68% cum, SequenceTransactions 67.27% cum, SnapshotDirtyTracking/copyBoolMap 54.05% cum, SubmitTransaction 3.90% cum
+t160 baseline: Sequencer.createBlock 66.39% cum, SequenceTransactions 66.01% cum, SnapshotDirtyTracking/copyBoolMap 54.76% cum, SubmitTransaction 4.30% cum
+```
+
+Current diagnosis:
+
+```text
+The latest retest does not replace the clean max of 146.7 TPS. Current account state is the immediate test blocker: baseline still emits maker insufficient-margin, while maker_guard avoids the error by reducing maker submissions and therefore cannot prove a higher clean ceiling. Core profile remains consistent with the earlier diagnosis: sequencer transaction sequencing and dirty order snapshot copy/hash work dominate CPU. No core code changes were made.
+```
