@@ -302,3 +302,16 @@ SubmitTransaction: 3.79s / 8.02% cum
 ```
 
 This run did not change the clean max because maker insufficient-margin errors dominated the test. The code change only removes unnecessary local RPC load.
+
+## Current Retest State
+
+Later retests are no longer reproducing the `146.7 trades/s` clean max. The strongest immediate cause is test account state, not local signing or DNS:
+
+```text
+MATCH_MAKER_CANCEL_EVERY=1: 1966 fills in 31s = 63.3 trades/s, margin errors removed but cancel traffic dominated
+MATCH_LEVELS=1: 2359 fills in 31s = 76.1 trades/s
+MATCH_INVENTORY_CAP=0.01: 3290 fills in 46s = 71.4 trades/s, maker insufficient-margin errors persisted
+owner L2 ETH: ~0.09, not enough for another broad fresh-account sweep with MATCH_GAS_ETH=0.1
+```
+
+Interpretation: the earlier clean ceiling remains the best measured max, but the current account set is not clean enough for a fair max search. A next clean run should either fund the owner for fresh sub-accounts with a lower gas target, or explicitly reset/replace the current maker accounts before comparing TPS again.

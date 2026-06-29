@@ -28,6 +28,20 @@ Clean max remains `146.7 trades/s`.
 | Existing accounts, `MATCH_MAKER_DEPOSIT=500`, `MATCH_TAKER_DEPOSIT=200` | `74.6 TPS` | `/tmp/perf-manual-deposit500-200-20260630-*.log` | Reject. Accounts were already above deposit targets; margin errors persisted. |
 | Fresh accounts, default cap | `23.2 TPS` | `/tmp/perf-manual-fresh-accounts-20260630-064658.log` | Reject. Large inventory cap caused taker and maker insufficient-margin errors. |
 | Fresh account retry with lower cap and larger deposits | `73.1 TPS` | `/tmp/perf-manual-fresh-deposit-cap001-20260630-*.log` | Reject. Maker insufficient-margin errors persisted after the first polluted run. |
+| `MATCH_MAKER_CANCEL_EVERY=1` | `63.3 TPS` | `/tmp/perf-manual-cancel-every1-20260630-065353.log` | Reject. It removed margin errors but cancel traffic reduced fill throughput. |
+| `MATCH_LEVELS=1` | `76.1 TPS` | `/tmp/perf-manual-levels1-20260630-065453.log` | Reject. Lower open-order notional reduced submit pressure and did not recover TPS. |
+| Existing accounts, `MATCH_INVENTORY_CAP=0.01` | `71.4 TPS` | `/tmp/perf-manual-cap001-existing-20260630-065616.log` | Reject. Taker inventory stayed bounded, but maker insufficient-margin errors persisted. |
+
+## Current Account/Funding State
+
+The perf owner account currently has about `0.09` L2 ETH. That is not enough for another broad fresh-account sweep with the current default gas target (`MATCH_GAS_ETH=0.1` per generated sub-account).
+
+```text
+owner: 0xE1A44ca6F8c577458232A59080D0DC6A22419c33
+eth_balance: 0.09
+```
+
+The current low-TPS runs are dominated by maker-side insufficient-margin errors. Reducing inventory cap, reducing levels, and canceling more often did not restore the earlier clean max.
 
 ## Code Changes
 
