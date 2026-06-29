@@ -184,6 +184,14 @@ def maker_size_after_error(key, current_size, min_size, backoff):
     return max(float(min_size), float(current_size) * float(backoff))
 
 
+def maker_cooldown_until(key, consecutive_errors, threshold, cooldown_sec, now):
+    if key != "insufficient_margin" or threshold <= 0 or cooldown_sec <= 0:
+        return 0.0
+    if consecutive_errors < threshold:
+        return 0.0
+    return float(now) + float(cooldown_sec)
+
+
 def record_error(stats, samples, prefix, exc):
     key = f"{prefix}:{error_key(exc)}"
     stats[key] += 1
@@ -196,7 +204,15 @@ def submit_success_counter(error_prefix):
 
 
 def summary_counts(stats):
-    keys = ("submit_ok", "taker_submit_ok", "maker_submit_ok", "taker_sent", "cancel_ok")
+    keys = (
+        "submit_ok",
+        "taker_submit_ok",
+        "maker_submit_ok",
+        "taker_sent",
+        "cancel_ok",
+        "maker_cooldown",
+        "maker_cooldown_skipped",
+    )
     return {key: stats.get(key, 0) for key in keys}
 
 
@@ -505,6 +521,8 @@ async def maker_loop(
     samples,
     min_size=None,
     size_backoff=1.0,
+    error_cooldown_threshold=0,
+    error_cooldown_sec=0.0,
 ):
     next_at = time.perf_counter()
     if initial_delay > 0:
@@ -513,21 +531,45 @@ async def maker_loop(
     tick = 0
     current_size = size
     min_size = size if min_size is None else min_size
+    consecutive_margin_errors = 0
+    cooldown_until = 0.0
     while not stop.is_set():
         try:
+            now = time.perf_counter()
+            if cooldown_until > now:
+                stats["maker_cooldown_skipped"] += 1
+                next_at = max(next_at + interval, cooldown_until)
+                await asyncio.sleep(max(0.0, next_at - time.perf_counter()))
+                continue
             if guard_state is not None and not guard_state.get("refresh_needed", True):
                 stats["maker_refresh_skipped"] += 1
             else:
                 if cancel_every > 0 and tick % cancel_every == 0:
                     await submit_cancel_all(rpc, account, market_id, stats, nonce_mode)
                 await post_maker_liquidity(rpc, account, market_id, ask_prices, bid_prices, current_size, stats, nonce_mode)
+                consecutive_margin_errors = 0
         except Exception as exc:
             key = error_key(exc)
             record_error(stats, samples, "maker_error", exc)
+            if key == "insufficient_margin":
+                consecutive_margin_errors += 1
+            else:
+                consecutive_margin_errors = 0
             adjusted_size = maker_size_after_error(key, current_size, min_size, size_backoff)
             if adjusted_size < current_size:
                 current_size = adjusted_size
                 stats["maker_size_backoff"] += 1
+            next_cooldown_until = maker_cooldown_until(
+                key,
+                consecutive_margin_errors,
+                error_cooldown_threshold,
+                error_cooldown_sec,
+                time.perf_counter(),
+            )
+            if next_cooldown_until:
+                cooldown_until = next_cooldown_until
+                stats["maker_cooldown"] += 1
+                consecutive_margin_errors = 0
             if nonce_mode != "time":
                 await resync_nonce_async(account, stats)
         tick += 1
@@ -651,6 +693,14 @@ async def amain():
     taker_size = env_float("MATCH_TAKER_SIZE", cfg.get("taker_order_size", base_size))
     maker_min_size = env_float("MATCH_MAKER_MIN_SIZE", maker_size)
     maker_size_backoff = env_float("MATCH_MAKER_SIZE_BACKOFF", 1.0)
+    maker_error_cooldown_threshold = env_int(
+        "MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD",
+        cfg.get("maker_error_cooldown_threshold", 0),
+    )
+    maker_error_cooldown_sec = env_float(
+        "MATCH_MAKER_ERROR_COOLDOWN_SEC",
+        cfg.get("maker_error_cooldown_sec", 0.0),
+    )
     cap = env_float("MATCH_INVENTORY_CAP", cfg.get("inventory_cap", 0.5))
     spread = float(cfg.get("spread", 0.0005))
     slip = float(cfg.get("taker_slippage", 0.01))
@@ -758,6 +808,7 @@ async def amain():
         f"maker_mode={maker_mode} taker_mode={taker_mode} active_roles={active_roles} "
         f"maker_refresh_sec={maker_refresh_sec} maker_stagger={maker_stagger} "
         f"account_inflight={account_inflight} maker_guard={maker_guard} poll_mode={position_poll_mode} "
+        f"maker_error_cooldown={maker_error_cooldown_threshold}/{maker_error_cooldown_sec}s "
         f"maker_deposit={maker_deposit} taker_deposit={taker_deposit} "
         f"nonce_mode={nonce_mode} "
         f"guard_min_bid={maker_guard_min_bid} guard_min_ask={maker_guard_min_ask} "
@@ -889,12 +940,14 @@ async def amain():
                             nonce_mode,
                             stop,
                             stats,
-                            samples,
-                            maker_min_size,
-                            maker_size_backoff,
-                        )
+                        samples,
+                        maker_min_size,
+                        maker_size_backoff,
+                        maker_error_cooldown_threshold,
+                        maker_error_cooldown_sec,
                     )
                 )
+            )
         started_at = time.time()
         tasks.append(asyncio.create_task(reporter(pos, taker_offset, fills, taker_size, cap, stats, stop, started_at)))
 
@@ -962,6 +1015,8 @@ async def amain():
             f"submit_ok={counts['submit_ok']} taker_submit_ok={counts['taker_submit_ok']} "
             f"maker_submit_ok={counts['maker_submit_ok']} taker_sent={counts['taker_sent']} "
             f"cancel_ok={counts['cancel_ok']} maker_refresh_skipped={stats.get('maker_refresh_skipped', 0)} "
+            f"maker_cooldown={counts['maker_cooldown']} "
+            f"maker_cooldown_skipped={counts['maker_cooldown_skipped']} "
             f"book_guard_ok={stats.get('book_guard_ok', 0)} "
             f"errors={error_summary} latency_avg_ms={latency_avg_ms} latency={latency} samples={samples} "
             f"final taker_inv range [{min(inv):+.4f},{max(inv):+.4f}]"

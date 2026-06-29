@@ -1,7 +1,9 @@
 import ast
+import asyncio
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 from dex import BUY, SELL
 from match import (
@@ -14,6 +16,8 @@ from match import (
     latency_bucket,
     latency_summary,
     maker_size_after_error,
+    maker_cooldown_until,
+    maker_loop,
     market_depth,
     mode_enabled,
     normalize_position_poll_mode,
@@ -161,6 +165,8 @@ class MatchHelperTest(unittest.TestCase):
                 "maker_submit_ok": 6,
                 "taker_sent": 5,
                 "cancel_ok": 2,
+                "maker_cooldown": 0,
+                "maker_cooldown_skipped": 0,
             },
         )
 
@@ -236,6 +242,44 @@ class MatchHelperTest(unittest.TestCase):
             0.005,
         )
 
+    def test_maker_cooldown_until_requires_insufficient_margin_threshold(self):
+        self.assertEqual(
+            maker_cooldown_until(
+                "nonce",
+                consecutive_errors=3,
+                threshold=2,
+                cooldown_sec=10.0,
+                now=100.0,
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            maker_cooldown_until(
+                "insufficient_margin",
+                consecutive_errors=1,
+                threshold=2,
+                cooldown_sec=10.0,
+                now=100.0,
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            maker_cooldown_until(
+                "insufficient_margin",
+                consecutive_errors=2,
+                threshold=2,
+                cooldown_sec=10.0,
+                now=100.0,
+            ),
+            110.0,
+        )
+
+    def test_summary_counts_exposes_maker_cooldown_totals(self):
+        stats = Counter({"maker_cooldown": 2, "maker_cooldown_skipped": 3})
+
+        self.assertEqual(summary_counts(stats)["maker_cooldown"], 2)
+        self.assertEqual(summary_counts(stats)["maker_cooldown_skipped"], 3)
+
     def test_taker_loop_call_uses_declared_positional_arity(self):
         tree = ast.parse(Path("match.py").read_text())
         taker_loop_arity = None
@@ -270,6 +314,44 @@ class MatchHelperTest(unittest.TestCase):
 
     def test_next_time_nonce_stays_above_state_nonce(self):
         self.assertEqual(next_time_nonce_value(previous=0, now_ms=2000, state_nonce=2500), 2501)
+
+
+class MakerLoopCooldownTest(unittest.IsolatedAsyncioTestCase):
+    async def test_maker_loop_cools_down_after_margin_error(self):
+        stats = Counter()
+        samples = {}
+        stop = asyncio.Event()
+
+        async def fail_post(*args, **kwargs):
+            raise RuntimeError("insufficient margin for perp order")
+
+        with patch("match.post_maker_liquidity", fail_post):
+            task = asyncio.create_task(
+                maker_loop(
+                    rpc=None,
+                    account=object(),
+                    market_id=1,
+                    ask_prices=[1.0],
+                    bid_prices=[1.0],
+                    size=0.005,
+                    interval=0.01,
+                    cancel_every=0,
+                    initial_delay=0.0,
+                    guard_state=None,
+                    nonce_mode="time",
+                    stop=stop,
+                    stats=stats,
+                    samples=samples,
+                    error_cooldown_threshold=1,
+                    error_cooldown_sec=0.03,
+                )
+            )
+            await asyncio.sleep(0.07)
+            stop.set()
+            await task
+
+        self.assertGreaterEqual(stats["maker_cooldown"], 1)
+        self.assertGreaterEqual(stats["maker_cooldown_skipped"], 1)
 
 
 if __name__ == "__main__":

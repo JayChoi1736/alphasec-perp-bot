@@ -25,6 +25,7 @@ class PerfStagesTest(unittest.TestCase):
             "DONE: 717 fills in 21s = 34.1 trades/s; "
             "submit_ok=1829 taker_submit_ok=750 maker_submit_ok=1079 taker_sent=788 "
             "cancel_ok=38 maker_refresh_skipped=0 book_guard_ok=0 "
+            "maker_cooldown=2 maker_cooldown_skipped=3 "
             "errors={} "
             "latency_avg_ms={'taker': 971.7, 'maker': 666.6, 'taker_sign': 2.5, "
             "'taker_inflight_wait': 1006.8} "
@@ -39,6 +40,8 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(parsed["submit_ok"], 1829)
         self.assertEqual(parsed["taker_submit_ok"], 750)
         self.assertEqual(parsed["maker_submit_ok"], 1079)
+        self.assertEqual(parsed["maker_cooldown"], 2)
+        self.assertEqual(parsed["maker_cooldown_skipped"], 3)
         self.assertEqual(parsed["latency_avg_ms"]["taker"], 971.7)
         self.assertEqual(parsed["latency_avg_ms"]["taker_inflight_wait"], 1006.8)
 
@@ -229,6 +232,15 @@ class PerfStagesTest(unittest.TestCase):
                 data = json.load(handle)
             self.assertEqual(data["rpc_url"], "https://rpc")
             self.assertEqual(data["keystore"], f"{fresh_dir}/perf-stage-baseline-ts.accounts.json")
+
+
+    def test_maker_cooldown_stage_sets_error_cooldown(self):
+        env = stage_env("maker_cooldown")
+
+        self.assertEqual(env["MATCH_POSITION_POLL_MODE"], "final")
+        self.assertEqual(env["MATCH_INVENTORY_CAP"], "1.0")
+        self.assertEqual(env["MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD"], "2")
+        self.assertEqual(env["MATCH_MAKER_ERROR_COOLDOWN_SEC"], "10")
 
 
 if __name__ == "__main__":

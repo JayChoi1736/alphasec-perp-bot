@@ -94,6 +94,18 @@ STAGES = {
             "MATCH_INVENTORY_CAP": "1.0",
         },
     },
+    "maker_cooldown": {
+        "description": "final-only polling with cooldown after repeated maker margin errors",
+        "env": {
+            "MATCH_NONCE_MODE": "normal",
+            "MATCH_ACCOUNT_INFLIGHT": "1",
+            "MATCH_MAKER_GUARD": "0",
+            "MATCH_POSITION_POLL_MODE": "final",
+            "MATCH_INVENTORY_CAP": "1.0",
+            "MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD": "2",
+            "MATCH_MAKER_ERROR_COOLDOWN_SEC": "10",
+        },
+    },
 }
 
 

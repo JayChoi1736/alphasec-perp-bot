@@ -319,3 +319,62 @@ low-millisecond, RPC admission/SubmitTransaction is not the primary CPU cost,
 and core sequencing plus dirty snapshot copy/hash work dominate while maker
 insufficient-margin churn keeps this account set from producing a clean max run.
 ```
+
+## Maker Error Cooldown Experiment
+
+Loadgen change:
+
+```text
+match.py: add optional MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD and MATCH_MAKER_ERROR_COOLDOWN_SEC
+match.py: expose maker_cooldown and maker_cooldown_skipped in DONE summary
+perf_stages.py: add maker_cooldown stage
+```
+
+Reason:
+
+```text
+If a small subset of maker accounts repeatedly hits insufficient-margin, those
+accounts can waste maker submit budget. The cooldown option pauses a maker after
+repeated insufficient-margin errors without changing default final_poll behavior.
+```
+
+Results:
+
+```text
+summary: docs/perf-stage-summary-maker-cooldown-20260630-075610.md
+final_poll target=240: 1675 fills in 31s = 54.0 TPS, maker insufficient-margin=111
+maker_cooldown threshold=2 target=240: 1558 fills in 31s = 50.2 TPS, maker insufficient-margin=44
+
+summary: docs/perf-stage-summary-maker-cooldown-aggressive-20260630-075825.md
+maker_cooldown threshold=1 target=240: 1575 fills in 31s = 50.8 TPS, maker insufficient-margin=17
+
+summary: docs/perf-stage-summary-maker-cooldown-counters-20260630-080137.md
+maker_cooldown threshold=1 target=240: 1556 fills in 31s = 50.1 TPS
+maker_cooldown=7
+maker_cooldown_skipped=4
+maker insufficient-margin=7
+taker avg latency=546.1ms
+taker sign avg=2.5ms
+taker in-flight wait avg=573.3ms
+```
+
+Profile from the counter-verified run:
+
+```text
+profile: /tmp/perf-stage-maker_cooldown-20260630-080137.pprof.pb.gz
+Sequencer.createBlock: 19.01s / 75.47% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.95s / 75.23% cum
+OrderBook.SnapshotDirtyTracking: 16.11s / 63.95% cum
+book.copyBoolMap: 16.11s / 63.95% cum
+SubmitTransaction: 0.78s / 3.10% cum
+```
+
+Interpretation:
+
+```text
+Cooldown reduces maker insufficient-margin errors, but it also reduces maker
+liquidity/repost pressure enough that filled TPS stays below final_poll. This
+does not become the max-TPS path. It strengthens the current diagnosis: failed
+maker submit churn is a retest hygiene issue, while the throughput ceiling is
+still core sequencing plus dirty snapshot copy/hash work.
+```

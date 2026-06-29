@@ -497,3 +497,51 @@ cost is core block sequencing plus dirty order snapshot copy/hash work. Current
 accounts are degraded by maker insufficient-margin churn, so 47.4 TPS does not
 replace the clean 146.7 TPS max.
 ```
+
+## Maker Cooldown Rejection
+
+An optional maker error cooldown was added to test whether repeated
+insufficient-margin makers were wasting enough submit budget to become the
+current bottleneck.
+
+```text
+code: MATCH_MAKER_ERROR_COOLDOWN_THRESHOLD, MATCH_MAKER_ERROR_COOLDOWN_SEC
+stage: maker_cooldown
+default behavior: unchanged unless the env vars are set
+```
+
+Measured results:
+
+```text
+summary: docs/perf-stage-summary-maker-cooldown-20260630-075610.md
+final_poll target=240: 54.0 TPS
+maker_cooldown threshold=2 target=240: 50.2 TPS
+
+summary: docs/perf-stage-summary-maker-cooldown-aggressive-20260630-075825.md
+maker_cooldown threshold=1 target=240: 50.8 TPS
+
+summary: docs/perf-stage-summary-maker-cooldown-counters-20260630-080137.md
+maker_cooldown threshold=1 target=240: 50.1 TPS
+maker_cooldown=7
+maker_cooldown_skipped=4
+maker insufficient-margin=7
+```
+
+Profile from the latest cooldown run:
+
+```text
+Sequencer.createBlock: 19.01s / 75.47% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.95s / 75.23% cum
+OrderBook.SnapshotDirtyTracking: 16.11s / 63.95% cum
+book.copyBoolMap: 16.11s / 63.95% cum
+SubmitTransaction: 0.78s / 3.10% cum
+```
+
+Conclusion:
+
+```text
+Maker cooldown reduces insufficient-margin errors but lowers filled TPS versus
+final_poll. It is rejected as the max-TPS path. This narrows the diagnosis:
+failed maker submits are not the primary throughput ceiling; core sequencing and
+dirty snapshot copy/hash work remain the dominant bottleneck.
+```
