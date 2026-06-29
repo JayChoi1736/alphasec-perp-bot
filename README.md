@@ -47,7 +47,7 @@ accounts so they match each other):
 | `ref_price` | fallback mid when the book + oracle are empty |
 | maker `spread` / `levels` / `level_step` | inner offset, ladder depth per side, gap between levels |
 | `taker_slippage` | how far past the touch the taker crosses |
-| `tps`, `load_tps`, `per_account_tps`, `match_tps`, `match_deposit` | load-test knobs (below) |
+| `tps`, `load_tps`, `per_account_tps`, `match_tps`, `match_deposit`, `inventory_cap` | load-test knobs (below) |
 
 `tick_size`/`lot_size`/price-band are read live from the registry (`getMarket`,
 with an ABI fallback); config values are only used if that call fails.
@@ -109,16 +109,20 @@ Measured (dev node, verified by counting on-chain DEX txs = submissions):
 | 100 | 25 | 98.7 tx/s (5 min) | ✓ 29635=29635 |
 
 ### B) Matched — `match.py`
-Splits accounts into maker/taker pairs: makers rest ASKs at mark, takers IOC-BUY
-across them → **real fills**. Trade count is exact: `taker long ÷ order_size`
-(cross-checked against maker short).
+Splits accounts into maker/taker pairs producing **real fills**, with inventory
+rebalancing so it runs indefinitely:
+- makers quote both sides, skipping the side that would push them past `inventory_cap`;
+- takers hold a direction until they hit `±inventory_cap`, then reverse — so each
+  position sweeps a triangle wave inside the band and **margin never grows**.
 ```bash
-.venv/bin/python match.py config.dev.json <target_trades_s> [duration_s]
+.venv/bin/python match.py config.dev.json <target_trades_s> [duration_s]   # duration 0 = until Ctrl-C
 ```
-Each run uses fresh accounts (gas + token 2 + deposit) so positions start flat.
-Note takers go long monotonically, so margin grows over time — raise `match_deposit`
-or keep runs bounded for high rates. Measured: 20 trades/s target → 19.1 trades/s
-over 30 s, `taker_long == maker_short`.
+Fresh accounts per run (gas + token 2 + deposit). A background poller snapshots
+positions each second so the order loops never block on RPC; fills are counted
+as cumulative |position change| on the taker side. Measured: 20 trades/s target →
+~13 trades/s with taker inventory oscillating within ±0.5 (no margin drift).
+Relevant config: `match_tps`, `match_deposit`, `inventory_cap`, `spread` (maker
+offset, must be < `taker_slippage`).
 
 ## Wire encoding (per command, verified against a live node)
 | field | encoding |
