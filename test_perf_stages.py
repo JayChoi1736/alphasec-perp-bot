@@ -61,6 +61,15 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(env["MATCH_PER_ACCOUNT_TPS"], "1")
         self.assertEqual(env["MATCH_ACCOUNT_INFLIGHT"], "1")
 
+    def test_maker_adaptive_stage_backs_off_maker_size_only(self):
+        env = stage_env("maker_adaptive")
+
+        self.assertEqual(env["MATCH_NONCE_MODE"], "normal")
+        self.assertEqual(env["MATCH_ACCOUNT_INFLIGHT"], "1")
+        self.assertEqual(env["MATCH_MAKER_GUARD"], "0")
+        self.assertEqual(env["MATCH_MAKER_MIN_SIZE"], "0.001")
+        self.assertEqual(env["MATCH_MAKER_SIZE_BACKOFF"], "0.5")
+
     def test_parse_done_text_returns_none_when_missing_done_line(self):
         self.assertIsNone(parse_done_text("no done line"))
 

@@ -157,6 +157,16 @@ def error_key(exc):
     return exc.__class__.__name__
 
 
+def maker_size_after_error(key, current_size, min_size, backoff):
+    if key != "insufficient_margin" or backoff >= 1:
+        return current_size
+    if backoff <= 0:
+        raise ValueError("maker size backoff must be positive")
+    if min_size <= 0:
+        raise ValueError("maker min size must be positive")
+    return max(float(min_size), float(current_size) * float(backoff))
+
+
 def record_error(stats, samples, prefix, exc):
     key = f"{prefix}:{error_key(exc)}"
     stats[key] += 1
@@ -474,12 +484,16 @@ async def maker_loop(
     stop,
     stats,
     samples,
+    min_size=None,
+    size_backoff=1.0,
 ):
     next_at = time.perf_counter()
     if initial_delay > 0:
         next_at += initial_delay
         await asyncio.sleep(initial_delay)
     tick = 0
+    current_size = size
+    min_size = size if min_size is None else min_size
     while not stop.is_set():
         try:
             if guard_state is not None and not guard_state.get("refresh_needed", True):
@@ -487,9 +501,14 @@ async def maker_loop(
             else:
                 if cancel_every > 0 and tick % cancel_every == 0:
                     await submit_cancel_all(rpc, account, market_id, stats, nonce_mode)
-                await post_maker_liquidity(rpc, account, market_id, ask_prices, bid_prices, size, stats, nonce_mode)
+                await post_maker_liquidity(rpc, account, market_id, ask_prices, bid_prices, current_size, stats, nonce_mode)
         except Exception as exc:
+            key = error_key(exc)
             record_error(stats, samples, "maker_error", exc)
+            adjusted_size = maker_size_after_error(key, current_size, min_size, size_backoff)
+            if adjusted_size < current_size:
+                current_size = adjusted_size
+                stats["maker_size_backoff"] += 1
             if nonce_mode != "time":
                 await resync_nonce_async(account, stats)
         tick += 1
@@ -611,6 +630,8 @@ async def amain():
     base_size = float(cfg.get("order_size", 0.01))
     maker_size = env_float("MATCH_MAKER_SIZE", cfg.get("maker_order_size", base_size))
     taker_size = env_float("MATCH_TAKER_SIZE", cfg.get("taker_order_size", base_size))
+    maker_min_size = env_float("MATCH_MAKER_MIN_SIZE", maker_size)
+    maker_size_backoff = env_float("MATCH_MAKER_SIZE_BACKOFF", 1.0)
     cap = env_float("MATCH_INVENTORY_CAP", cfg.get("inventory_cap", 0.5))
     spread = float(cfg.get("spread", 0.0005))
     slip = float(cfg.get("taker_slippage", 0.01))
@@ -710,7 +731,8 @@ async def amain():
         f"match_async: target={target} trades/s makers={maker_count} takers={taker_count} worker={worker_index}/{worker_count} "
         f"maker_range={maker_start}:{maker_end} taker_range={taker_start}:{taker_end} "
         f"local_makers={local_maker_count} local_takers={local_taker_count} per_account_tps={per_acct} market={market_id} "
-        f"mark={mark} levels={levels} maker_size={maker_size} taker_size={taker_size} "
+        f"mark={mark} levels={levels} maker_size={maker_size} maker_min_size={maker_min_size} "
+        f"maker_size_backoff={maker_size_backoff} taker_size={taker_size} "
         f"maker_mode={maker_mode} taker_mode={taker_mode} active_roles={active_roles} "
         f"maker_refresh_sec={maker_refresh_sec} maker_stagger={maker_stagger} "
         f"account_inflight={account_inflight} maker_guard={maker_guard} "
@@ -844,9 +866,11 @@ async def amain():
                             stop,
                             stats,
                             samples,
+                            maker_min_size,
+                            maker_size_backoff,
                         )
+                    )
                 )
-            )
         started_at = time.time()
         tasks.append(asyncio.create_task(reporter(pos, taker_offset, fills, taker_size, cap, stats, stop, started_at)))
 
@@ -868,13 +892,13 @@ async def amain():
                             interval,
                             account_inflight,
                             initial_taker_direction(pos[pos_index], idx),
-                            nonce_mode,
-                            stop,
-                            stats,
-                            samples,
-                        )
+                        nonce_mode,
+                        stop,
+                        stats,
+                        samples,
                     )
                 )
+            )
 
         try:
             if duration > 0:

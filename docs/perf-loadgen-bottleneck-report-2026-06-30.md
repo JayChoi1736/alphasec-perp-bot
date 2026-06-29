@@ -348,3 +348,37 @@ Current diagnosis:
 ```text
 The latest retest does not replace the clean max of 146.7 TPS. Current account state is the immediate test blocker: baseline still emits maker insufficient-margin, while maker_guard avoids the error by reducing maker submissions and therefore cannot prove a higher clean ceiling. Core profile remains consistent with the earlier diagnosis: sequencer transaction sequencing and dirty order snapshot copy/hash work dominate CPU. No core code changes were made.
 ```
+
+## Wide Recheck And Maker Adaptive Experiment
+
+```text
+wide recheck summary: docs/perf-stage-summary-wide-recheck-20260630-071917.md
+wide_accounts target=240: 2021 fills in 31s = 65.1 TPS
+wide taker avg latency: 3459.2ms
+wide taker in-flight wait avg: 3356.1ms
+wide maker insufficient-margin: 12
+```
+
+Result: wider fanout currently worsens RPC/core admission latency and does not recover the earlier max.
+
+Optional loadgen change:
+
+```text
+match.py: per-maker order-size backoff after maker insufficient-margin
+perf_stages.py: maker_adaptive stage
+test coverage: maker_size_after_error helper and maker/taker loop call arity checks
+```
+
+Adaptive result:
+
+```text
+summary: docs/perf-stage-summary-maker-adaptive-20260630-072656.md
+baseline target=240: 1662 fills in 31s = 53.6 TPS, maker insufficient-margin=154
+maker_adaptive target=240: 1671 fills in 31s = 53.9 TPS, maker insufficient-margin=84
+```
+
+Current diagnosis remains:
+
+```text
+maker_adaptive reduces failed maker traffic, but it does not move max TPS. Current ceiling evidence still points to core transaction sequencing and order-book snapshot/copy work under the present perf/account state. The latest measured clean max remains 146.7 TPS.
+```

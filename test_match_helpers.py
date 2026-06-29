@@ -1,5 +1,7 @@
+import ast
 import unittest
 from collections import Counter
+from pathlib import Path
 
 from dex import BUY, SELL
 from match import (
@@ -11,6 +13,7 @@ from match import (
     initial_taker_direction,
     latency_bucket,
     latency_summary,
+    maker_size_after_error,
     market_depth,
     mode_enabled,
     position_poll_items,
@@ -189,6 +192,50 @@ class MatchHelperTest(unittest.TestCase):
         self.assertTrue(has_book_liquidity(data, 1, 0.1, 0.1))
         self.assertFalse(has_book_liquidity(data, 1, 0.3, 0.1))
         self.assertFalse(has_book_liquidity(data, 1, 0.1, 0.2))
+
+    def test_maker_size_after_error_backs_off_insufficient_margin(self):
+        self.assertEqual(
+            maker_size_after_error("insufficient_margin", 0.005, min_size=0.001, backoff=0.5),
+            0.0025,
+        )
+
+    def test_maker_size_after_error_respects_minimum(self):
+        self.assertEqual(
+            maker_size_after_error("insufficient_margin", 0.0015, min_size=0.001, backoff=0.5),
+            0.001,
+        )
+
+    def test_maker_size_after_error_ignores_other_errors(self):
+        self.assertEqual(
+            maker_size_after_error("nonce", 0.005, min_size=0.001, backoff=0.5),
+            0.005,
+        )
+
+    def test_taker_loop_call_uses_declared_positional_arity(self):
+        tree = ast.parse(Path("match.py").read_text())
+        taker_loop_arity = None
+        taker_loop_calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "taker_loop":
+                taker_loop_arity = len(node.args.args)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "taker_loop":
+                taker_loop_calls.append(len(node.args))
+
+        self.assertIsNotNone(taker_loop_arity)
+        self.assertEqual(taker_loop_calls, [taker_loop_arity])
+
+    def test_maker_loop_call_uses_declared_positional_arity(self):
+        tree = ast.parse(Path("match.py").read_text())
+        maker_loop_arity = None
+        maker_loop_calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "maker_loop":
+                maker_loop_arity = len(node.args.args)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "maker_loop":
+                maker_loop_calls.append(len(node.args))
+
+        self.assertIsNotNone(maker_loop_arity)
+        self.assertEqual(maker_loop_calls, [maker_loop_arity])
 
     def test_next_time_nonce_uses_now_when_it_is_highest(self):
         self.assertEqual(next_time_nonce_value(previous=1000, now_ms=2000, state_nonce=1500), 2000)

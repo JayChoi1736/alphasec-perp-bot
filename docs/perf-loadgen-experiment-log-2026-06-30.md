@@ -144,3 +144,46 @@ Interpretation:
 ```text
 This retest does not replace the clean max. Highest observed was 57.0 TPS, but the current existing-account state is polluted: baseline runs still hit maker insufficient-margin, and maker_guard removes those errors by suppressing maker submissions rather than increasing clean liquidity. Core CPU profile still points at sequencer transaction sequencing and dirty order snapshot copy/hash work, not local signing or DNS.
 ```
+
+## Wide Recheck And Maker Adaptive Experiment
+
+Wide fanout recheck:
+
+```text
+summary: docs/perf-stage-summary-wide-recheck-20260630-071917.md
+command: perf_stages.py --target 240 --duration 30 --stages wide_accounts
+result: 2021 fills in 31s = 65.1 TPS
+taker_submit_ok: 2425
+maker_submit_ok: 1854
+taker avg latency: 3459.2ms
+taker in-flight wait avg: 3356.1ms
+maker insufficient-margin: 12
+```
+
+Interpretation:
+
+```text
+Wider account fanout did not recover throughput. It raised RPC/core admission latency into multi-second territory, so this is not a local signing or local account-count ceiling.
+```
+
+Loadgen change:
+
+```text
+match.py: add optional per-maker order-size backoff after maker insufficient-margin
+perf_stages.py: add maker_adaptive stage with MATCH_MAKER_SIZE_BACKOFF=0.5 and MATCH_MAKER_MIN_SIZE=0.001
+```
+
+Adaptive retest:
+
+```text
+summary: docs/perf-stage-summary-maker-adaptive-20260630-072656.md
+command: perf_stages.py --target 240 --duration 30 --stages baseline,maker_adaptive
+baseline: 1662 fills in 31s = 53.6 TPS, maker insufficient-margin=154
+maker_adaptive: 1671 fills in 31s = 53.9 TPS, maker insufficient-margin=84
+```
+
+Interpretation:
+
+```text
+maker_adaptive reduced failed maker traffic but did not materially increase filled TPS. Keep it as an optional loadgen hygiene stage, not as the current max-TPS path.
+```
