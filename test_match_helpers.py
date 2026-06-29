@@ -13,6 +13,7 @@ from match import (
     latency_summary,
     market_depth,
     mode_enabled,
+    position_poll_items,
     next_time_nonce_value,
     position_size_from_positions,
     record_latency,
@@ -103,6 +104,9 @@ class MatchHelperTest(unittest.TestCase):
     def test_apply_local_fill_tracks_expected_taker_inventory(self):
         self.assertEqual(apply_local_fill(0.00, BUY, 0.001), 0.001)
         self.assertEqual(apply_local_fill(0.00, SELL, 0.001), -0.001)
+
+    def test_position_poll_items_skip_maker_accounts(self):
+        self.assertEqual(position_poll_items(["m0", "m1", "t0", "t1"], 2), [(2, "t0"), (3, "t1")])
 
     def test_tx_hex_keeps_single_prefix(self):
         self.assertEqual(tx_hex(bytes.fromhex("abcd")), "0xabcd")

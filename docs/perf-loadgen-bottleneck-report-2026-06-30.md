@@ -281,3 +281,24 @@ SubmitTransaction: 1.47s / 7.76% cum
 Current clean max remains `146.7 trades/s`. Experimental `time_inflight2` reached `150.2 trades/s`, but it produced two taker nonce errors, so it is not counted as the clean ceiling.
 
 Additional local loadgen experiments are recorded in `docs/perf-loadgen-experiment-log-2026-06-30.md`. The tested variants did not beat the current clean max; the core-side bottleneck diagnosis remains unchanged.
+
+Latest loadgen-side code change:
+
+```text
+match.py: poll taker positions only; maker positions are no longer polled because they are not used for fill counting or taker inventory control.
+test: test_position_poll_items_skip_maker_accounts
+```
+
+Latest profile after that change:
+
+```text
+summary: docs/perf-stage-summary-taker-only-poll-2026-06-30.md
+result: 3470 fills in 46s = 75.3 trades/s
+profile: /tmp/perf-stage-baseline-20260630-064418.pprof.pb.gz
+Sequencer.createBlock: 27.82s / 58.88% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 27.61s / 58.43% cum
+OrderBook.SnapshotDirtyTracking: 19.64s / 41.57% cum
+SubmitTransaction: 3.79s / 8.02% cum
+```
+
+This run did not change the clean max because maker insufficient-margin errors dominated the test. The code change only removes unnecessary local RPC load.

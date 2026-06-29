@@ -110,6 +110,10 @@ def role_deposit_targets(default_deposit, maker_override=None, taker_override=No
     return maker_deposit, taker_deposit
 
 
+def position_poll_items(accounts, taker_offset):
+    return list(enumerate(accounts[taker_offset:], start=taker_offset))
+
+
 def choose_direction(position, cap, previous_direction):
     if position >= cap:
         return SELL
@@ -429,12 +433,11 @@ async def gather_limited(items, limit, func):
 
 async def poll_positions(rpc, accounts, market_id, pos, prev, fills, taker_offset, stop, stats, samples, interval):
     while not stop.is_set():
-        for idx, account in enumerate(accounts):
+        for idx, account in position_poll_items(accounts, taker_offset):
             try:
                 cur = await account_position(rpc, account.address, market_id)
                 pos[idx] = cur
-                if idx >= taker_offset:
-                    fills[0] += abs(cur - prev[idx])
+                fills[0] += abs(cur - prev[idx])
                 prev[idx] = cur
             except Exception as exc:
                 record_error(stats, samples, "poll_error", exc)
@@ -760,14 +763,15 @@ async def amain():
         connections=rpc_connections,
         resolve_once=resolve_once,
     ) as rpc:
+        initial_position_items = position_poll_items(accounts, taker_offset)
         initial_positions = await gather_limited(
-            accounts,
+            initial_position_items,
             setup_concurrency,
-            lambda account: account_position(rpc, account.address, market_id),
+            lambda item: account_position(rpc, item[1].address, market_id),
         )
-        for idx, value in enumerate(initial_positions):
+        for (idx, account), value in zip(initial_position_items, initial_positions):
             if isinstance(value, Exception):
-                print("initial position warn", accounts[idx].address[:10], value)
+                print("initial position warn", account.address[:10], value)
                 continue
             pos[idx] = value
             prev[idx] = value
