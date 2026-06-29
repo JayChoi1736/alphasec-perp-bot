@@ -451,3 +451,49 @@ on the clean path. The bottleneck evidence remains core sequencing plus dirty
 snapshot copy/hash work, while maker insufficient-margin churn is the immediate
 reason current retests underperform the clean post-GOMAXPROCS run.
 ```
+
+## Latest Retest After Push Attempt
+
+Push remained blocked by repository permissions:
+
+```text
+git push origin main
+ERROR: Permission to JayChoi1736/alphasec-perp-bot.git denied to probepark.
+```
+
+The requested retest was still executed locally:
+
+```text
+summary: docs/perf-stage-summary-final-poll-retest-20260630-075002.md
+profile: /tmp/perf-stage-final_poll-20260630-075002.pprof.pb.gz
+stage: final_poll
+target: 240 TPS
+duration: 30s
+result: 1470 fills in 31s = 47.4 TPS
+taker_submit_ok: 1440
+maker_submit_ok: 1377
+maker insufficient-margin: 128
+taker avg latency: 577.9ms
+taker signing avg latency: 2.5ms
+taker in-flight wait avg: 608.5ms
+```
+
+Profile evidence:
+
+```text
+Sequencer.createBlock: 19.02s / 75.75% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.97s / 75.55% cum
+OrderBook.SnapshotDirtyTracking: 16.25s / 64.72% cum
+book.copyBoolMap: 16.24s / 64.68% cum
+SubmitTransaction: 0.70s / 2.79% cum
+```
+
+Conclusion:
+
+```text
+Latest retest confirms the same diagnosis. Local signing is not the limiter,
+SubmitTransaction/RPC admission is visible but small in CPU, and the dominant
+cost is core block sequencing plus dirty order snapshot copy/hash work. Current
+accounts are degraded by maker insufficient-margin churn, so 47.4 TPS does not
+replace the clean 146.7 TPS max.
+```

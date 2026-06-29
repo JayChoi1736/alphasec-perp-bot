@@ -269,3 +269,53 @@ not producing a stable clean max search; the strongest confirmed ceiling is
 still core transaction sequencing plus dirty order snapshot copy/hash work, with
 maker insufficient-margin churn as the immediate retest blocker.
 ```
+
+## Push-Blocked Retest
+
+Push was attempted after committing the follow-up sweep docs, but GitHub denied
+write access for the current account:
+
+```text
+git push origin main
+ERROR: Permission to JayChoi1736/alphasec-perp-bot.git denied to probepark.
+```
+
+Retest command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 240 --duration 30 --stages final_poll --log-dir /tmp --summary docs/perf-stage-summary-final-poll-retest-20260630-075002.md --stage-timeout 180 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages final_poll --env MATCH_INVENTORY_CAP=1.0
+```
+
+Result:
+
+```text
+summary: docs/perf-stage-summary-final-poll-retest-20260630-075002.md
+profile: /tmp/perf-stage-final_poll-20260630-075002.pprof.pb.gz
+final_poll target=240: 1470 fills in 31s = 47.4 TPS
+taker_submit_ok=1440
+maker_submit_ok=1377
+maker insufficient-margin=128
+taker avg latency=577.9ms
+taker sign avg=2.5ms
+taker in-flight wait avg=608.5ms
+```
+
+Profile:
+
+```text
+Sequencer.createBlock: 19.02s / 75.75% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 18.97s / 75.55% cum
+OrderBook.SnapshotDirtyTracking: 16.25s / 64.72% cum
+book.copyBoolMap: 16.24s / 64.68% cum
+SubmitTransaction: 0.70s / 2.79% cum
+```
+
+Interpretation:
+
+```text
+The latest retest is lower than the 70.6 TPS current-state high and far below
+the 146.7 TPS clean max. It confirms the same bottleneck shape: local signing is
+low-millisecond, RPC admission/SubmitTransaction is not the primary CPU cost,
+and core sequencing plus dirty snapshot copy/hash work dominate while maker
+insufficient-margin churn keeps this account set from producing a clean max run.
+```
