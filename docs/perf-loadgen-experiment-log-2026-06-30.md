@@ -484,3 +484,51 @@ and raises taker wait latency. It is not the max-TPS path. The clean maker set
 still spends most core CPU in sequencing and dirty snapshot copy/hash work, so
 the remaining ceiling is not explained by local account selection alone.
 ```
+
+## Push-Blocked Retest
+
+Push status:
+
+```text
+git push origin main
+ERROR: Permission to JayChoi1736/alphasec-perp-bot.git denied to probepark.
+origin/main is not updated; local main remains ahead by 16 commits.
+```
+
+Commands:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 240 --duration 30 --stages final_poll --log-dir /tmp --summary docs/perf-stage-summary-push-retest-20260630-082107.md --stage-timeout 180 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages final_poll --env MATCH_INVENTORY_CAP=1.0
+
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 30 --stages final_poll --log-dir /tmp --summary docs/perf-stage-summary-push-retest-t300-20260630-082235.md --stage-timeout 180 --env MATCH_INVENTORY_CAP=1.0
+```
+
+Results:
+
+```text
+target=240: 1140 fills in 31s = 36.6 TPS, errors={}, taker avg=758.0ms, taker sign avg=3.2ms, taker in-flight wait avg=792.4ms
+target=300: 1139 fills in 31s = 36.7 TPS, errors={}, taker avg=972.1ms, taker sign avg=2.6ms, taker in-flight wait avg=1009.0ms
+```
+
+Profile from target=240:
+
+```text
+profile: /tmp/perf-stage-final_poll-20260630-082107.pprof.pb.gz
+Sequencer.createBlock: 19.18s / 76.51% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.12s / 76.27% cum
+OrderBook.SnapshotDirtyTracking: 17.01s / 67.85% cum
+book.copyBoolMap: 17.01s / 67.85% cum
+SubmitTransaction: 0.72s / 2.87% cum
+```
+
+Interpretation:
+
+```text
+Increasing final_poll target from 240 to 300 did not increase filled TPS.
+The extra target pressure mostly increased taker wait latency. Current clean
+final_poll ceiling is about 36-37 TPS in this account/core state, while the
+retained clean historical max remains 146.7 TPS from the immediate
+post-GOMAXPROCS fix run. The current profile still points at core sequencing
+plus dirty snapshot copy/hash work, not local signing or RPC admission as the
+primary bottleneck.
+```

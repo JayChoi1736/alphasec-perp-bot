@@ -625,3 +625,42 @@ Healthy maker selection is useful for proving that margin errors are not the
 primary throughput ceiling. It removes errors but lowers filled TPS and keeps
 the profile dominated by core sequencing plus dirty snapshot copy/hash work.
 ```
+
+## Push-Blocked Retest Update
+
+Push did not update GitHub because the current account has read-only access:
+
+```text
+ERROR: Permission to JayChoi1736/alphasec-perp-bot.git denied to probepark.
+```
+
+Retest results from local `main`:
+
+```text
+summary: docs/perf-stage-summary-push-retest-20260630-082107.md
+target=240 final_poll: 36.6 TPS, errors={}, taker avg=758.0ms, taker sign avg=3.2ms, wait avg=792.4ms
+
+summary: docs/perf-stage-summary-push-retest-t300-20260630-082235.md
+target=300 final_poll: 36.7 TPS, errors={}, taker avg=972.1ms, taker sign avg=2.6ms, wait avg=1009.0ms
+```
+
+Profile from target=240:
+
+```text
+Sequencer.createBlock: 19.18s / 76.51% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.12s / 76.27% cum
+OrderBook.SnapshotDirtyTracking: 17.01s / 67.85% cum
+book.copyBoolMap: 17.01s / 67.85% cum
+SubmitTransaction: 0.72s / 2.87% cum
+```
+
+Updated diagnosis:
+
+```text
+Current clean final_poll throughput is 36-37 TPS and no longer rises when
+target increases from 240 to 300. The historical clean max remains 146.7 TPS.
+This retest does not change the bottleneck call: local signing is still only
+~3ms, RPC admission/SubmitTransaction is small in CPU profile, and the dominant
+CPU path is core sequencer block creation plus dirty order snapshot copy/hash
+work.
+```
