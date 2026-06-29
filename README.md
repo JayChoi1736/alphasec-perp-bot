@@ -130,7 +130,9 @@ positions each second so the order loops never block on RPC; fills are counted
 as cumulative |position change| on the taker side. Measured: 20 trades/s target →
 ~13 trades/s with taker inventory oscillating within ±0.5 (no margin drift).
 Relevant config: `match_tps`, `match_deposit`, `inventory_cap`, `spread` (maker
-offset, must be < `taker_slippage`).
+offset, must be < `taker_slippage`), and `match_levels` / `level_step` — makers
+post a ladder of `match_levels` price points per side (default 1) for a richer,
+deeper-looking book instead of a single bid/ask price.
 
 ## Wire encoding (per command, verified against a live node)
 | field | encoding |

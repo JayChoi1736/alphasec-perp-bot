@@ -51,11 +51,16 @@ def main():
     mark = dev.mark_price(mid) or float(cfg["ref_price"])
     lo, hi = band_bounds(mark, band_bps)
     q = lambda x: round(x / tick) * tick
-    mk_ask, mk_bid = q(mark * (1 + spread)), q(mark * (1 - spread))   # maker quotes
+    # maker ladder: match_levels price points per side (richer-looking book)
+    mlevels = int(cfg.get("match_levels", 1))
+    mstep = float(cfg.get("level_step", 0.001))
+    mk_asks = [q(mark * (1 + spread + k * mstep)) for k in range(mlevels)]
+    mk_bids = [q(mark * (1 - spread - k * mstep)) for k in range(mlevels)]
     tk_buy = min(math.floor(hi / tick) * tick - tick, q(mark * (1 + slip)))
     tk_sell = max(math.ceil(lo / tick) * tick + tick, q(mark * (1 - slip)))
     print(f"match: target={target} trades/s -> {pairs} maker + {pairs} taker, market={mid} "
-          f"mark={mark} cap=+/-{cap} mkbid/ask={mk_bid}/{mk_ask} tkbuy/sell={tk_buy}/{tk_sell}")
+          f"mark={mark} cap=+/-{cap} levels={mlevels} bids={mk_bids[0]}..{mk_bids[-1]} "
+          f"asks={mk_asks[0]}..{mk_asks[-1]} tkbuy/sell={tk_buy}/{tk_sell}")
 
     # persistent keystore (generate missing) + top up gas/deposit to targets
     keystore = cfg.get("keystore", "accounts.json")
@@ -116,8 +121,10 @@ def main():
             try:
                 if k % 10 == 0:                        # clear stale resting orders
                     a.cancel_all(mid, wait=False)
-                a.order(mid, SELL, mk_ask, size, tif=POST, wait=False)
-                a.order(mid, BUY, mk_bid, size, tif=POST, wait=False)
+                for px in mk_asks:                     # ladder both sides
+                    a.order(mid, SELL, px, size, tif=POST, wait=False)
+                for px in mk_bids:
+                    a.order(mid, BUY, px, size, tif=POST, wait=False)
             except Exception:
                 a.resync_nonce()
             k += 1

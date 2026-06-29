@@ -15,7 +15,8 @@
     "level_step": 0.001,
     "inventory_cap": 0.5,
     "match_tps": 20,
-    "match_deposit": 100000
+    "match_deposit": 100000,
+    "match_levels": 5
   },
   "taker": {
     "private_key": "0xTAKER_PRIVATE_KEY  # a second funded account",
