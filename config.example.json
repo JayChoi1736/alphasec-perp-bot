@@ -1,0 +1,23 @@
+{
+  "rpc_url": "https://l2-rpc-qa.dexor.trade",
+  "dex_address": "0x00000000000000000000000000000000000000cc",
+  "market_id": 24,
+  "leverage": 10,
+  "margin_type": 0,
+  "interval": 3,
+  "ref_price": 84,
+  "maker": {
+    "private_key": "0xMAKER_PRIVATE_KEY",
+    "deposit": 0,
+    "spread": 0.001,
+    "order_size": 0.5,
+    "levels": 5,
+    "level_step": 0.001
+  },
+  "taker": {
+    "private_key": "0xTAKER_PRIVATE_KEY",
+    "deposit": 0,
+    "order_size": 0.5,
+    "taker_slippage": 0.01
+  }
+}

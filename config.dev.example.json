@@ -1,0 +1,23 @@
+{
+  "rpc_url": "http://localhost:8547",
+  "dex_address": "0x00000000000000000000000000000000000000cc",
+  "market_id": 22,
+  "leverage": 10,
+  "margin_type": 0,
+  "interval": 2,
+  "ref_price": 40000,
+  "maker": {
+    "private_key": "0xMAKER_PRIVATE_KEY  # nitro --dev account (funded + OracleSubmitter)",
+    "deposit": 5000,
+    "spread": 0.001,
+    "order_size": 0.01,
+    "levels": 5,
+    "level_step": 0.001
+  },
+  "taker": {
+    "private_key": "0xTAKER_PRIVATE_KEY  # a second funded account",
+    "deposit": 5000,
+    "order_size": 0.01,
+    "taker_slippage": 0.01
+  }
+}
