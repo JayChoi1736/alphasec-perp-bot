@@ -84,6 +84,16 @@ STAGES = {
             "MATCH_MAKER_SIZE_BACKOFF": "0.5",
         },
     },
+    "final_poll": {
+        "description": "safe baseline with final-only position polling to reduce read RPC during load",
+        "env": {
+            "MATCH_NONCE_MODE": "normal",
+            "MATCH_ACCOUNT_INFLIGHT": "1",
+            "MATCH_MAKER_GUARD": "0",
+            "MATCH_POSITION_POLL_MODE": "final",
+            "MATCH_INVENTORY_CAP": "1.0",
+        },
+    },
 }
 
 
@@ -364,7 +374,7 @@ def parse_args(argv):
     parser.add_argument("--target", type=float, default=300)
     parser.add_argument("--target-sweep", default="")
     parser.add_argument("--duration", type=float, default=20)
-    parser.add_argument("--stages", default="baseline,wide_accounts,time_inflight2,maker_guard,maker_adaptive")
+    parser.add_argument("--stages", default="baseline,wide_accounts,time_inflight2,maker_guard,maker_adaptive,final_poll")
     parser.add_argument("--log-dir", default="/tmp")
     parser.add_argument("--summary")
     parser.add_argument("--fresh-keystore-dir", default="")

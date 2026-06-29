@@ -52,6 +52,17 @@ def mode_enabled(value):
     return str(value).lower() not in ("0", "false", "no", "off")
 
 
+def normalize_position_poll_mode(value):
+    mode = str(value).strip().lower()
+    if mode in ("1", "true", "yes", "on", "continuous"):
+        return "continuous"
+    if mode in ("final", "end", "once"):
+        return "final"
+    if mode in ("0", "false", "no", "off", "none"):
+        return "off"
+    raise ValueError("MATCH_POSITION_POLL_MODE must be continuous, final, or off")
+
+
 def active_role_names(maker_mode, taker_mode):
     roles = []
     if maker_mode != "off":
@@ -132,6 +143,12 @@ def initial_taker_direction(position, ordinal):
 
 def apply_local_fill(position, side, quantity):
     return position + quantity if side == BUY else position - quantity
+
+
+def record_position_update(pos, prev, fills, idx, cur):
+    pos[idx] = cur
+    fills[0] += abs(cur - prev[idx])
+    prev[idx] = cur
 
 
 def tx_hex(raw_tx):
@@ -441,16 +458,18 @@ async def gather_limited(items, limit, func):
     return await asyncio.gather(*(run(item) for item in items), return_exceptions=True)
 
 
+async def poll_positions_once(rpc, accounts, market_id, pos, prev, fills, taker_offset, stats, samples):
+    for idx, account in position_poll_items(accounts, taker_offset):
+        try:
+            cur = await account_position(rpc, account.address, market_id)
+            record_position_update(pos, prev, fills, idx, cur)
+        except Exception as exc:
+            record_error(stats, samples, "poll_error", exc)
+
+
 async def poll_positions(rpc, accounts, market_id, pos, prev, fills, taker_offset, stop, stats, samples, interval):
     while not stop.is_set():
-        for idx, account in position_poll_items(accounts, taker_offset):
-            try:
-                cur = await account_position(rpc, account.address, market_id)
-                pos[idx] = cur
-                fills[0] += abs(cur - prev[idx])
-                prev[idx] = cur
-            except Exception as exc:
-                record_error(stats, samples, "poll_error", exc)
+        await poll_positions_once(rpc, accounts, market_id, pos, prev, fills, taker_offset, stats, samples)
         await asyncio.sleep(interval)
 
 
@@ -659,6 +678,9 @@ async def amain():
     setup_concurrency = env_int("MATCH_SETUP_CONCURRENCY", 8)
     rpc_timeout = env_float("MATCH_RPC_TIMEOUT", 10)
     poll_interval = env_float("MATCH_POLL_INTERVAL", 1.0)
+    position_poll_mode = normalize_position_poll_mode(
+        os.environ.get("MATCH_POSITION_POLL_MODE", cfg.get("position_poll_mode", "continuous"))
+    )
     maker_cancel_every = env_int("MATCH_MAKER_CANCEL_EVERY", cfg.get("maker_cancel_every", 20))
     maker_mode = os.environ.get("MATCH_MAKER_MODE", cfg.get("maker_mode", "refresh")).lower()
     taker_mode = os.environ.get("MATCH_TAKER_MODE", cfg.get("taker_mode", "on")).lower()
@@ -735,7 +757,7 @@ async def amain():
         f"maker_size_backoff={maker_size_backoff} taker_size={taker_size} "
         f"maker_mode={maker_mode} taker_mode={taker_mode} active_roles={active_roles} "
         f"maker_refresh_sec={maker_refresh_sec} maker_stagger={maker_stagger} "
-        f"account_inflight={account_inflight} maker_guard={maker_guard} "
+        f"account_inflight={account_inflight} maker_guard={maker_guard} poll_mode={position_poll_mode} "
         f"maker_deposit={maker_deposit} taker_deposit={taker_deposit} "
         f"nonce_mode={nonce_mode} "
         f"guard_min_bid={maker_guard_min_bid} guard_min_ask={maker_guard_min_ask} "
@@ -798,23 +820,25 @@ async def amain():
             pos[idx] = value
             prev[idx] = value
 
-        tasks = [
-            asyncio.create_task(
-                poll_positions(
-                    rpc,
-                    accounts,
-                    market_id,
-                    pos,
-                    prev,
-                    fills,
-                    taker_offset,
-                    stop,
-                    stats,
-                    samples,
-                    poll_interval,
+            tasks = []
+            if position_poll_mode == "continuous":
+                tasks.append(
+                    asyncio.create_task(
+                        poll_positions(
+                            rpc,
+                            accounts,
+                            market_id,
+                            pos,
+                            prev,
+                            fills,
+                            taker_offset,
+                            stop,
+                            stats,
+                            samples,
+                            poll_interval,
+                        )
+                    )
                 )
-            )
-        ]
         maker_guard_state = None
         if maker_guard:
             maker_guard_state = {"refresh_needed": True, "bid_qty": 0.0, "ask_qty": 0.0}
@@ -915,9 +939,12 @@ async def amain():
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        elapsed = time.time() - started_at
-        inv = pos[taker_offset:] or [0.0]
-        trades = fills[0] / taker_size if taker_size else 0.0
+            elapsed = time.time() - started_at
+            if position_poll_mode in ("continuous", "final"):
+                await poll_positions_once(rpc, accounts, market_id, pos, prev, fills, taker_offset, stats, samples)
+
+            inv = pos[taker_offset:] or [0.0]
+            trades = fills[0] / taker_size if taker_size else 0.0
         error_summary = {k: v for k, v in stats.items() if "error" in k}
         counts = summary_counts(stats)
         latency = {

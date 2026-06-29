@@ -70,6 +70,14 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(env["MATCH_MAKER_MIN_SIZE"], "0.001")
         self.assertEqual(env["MATCH_MAKER_SIZE_BACKOFF"], "0.5")
 
+    def test_final_poll_stage_disables_continuous_position_reads(self):
+        env = stage_env("final_poll")
+
+        self.assertEqual(env["MATCH_NONCE_MODE"], "normal")
+        self.assertEqual(env["MATCH_ACCOUNT_INFLIGHT"], "1")
+        self.assertEqual(env["MATCH_POSITION_POLL_MODE"], "final")
+        self.assertEqual(env["MATCH_INVENTORY_CAP"], "1.0")
+
     def test_parse_done_text_returns_none_when_missing_done_line(self):
         self.assertIsNone(parse_done_text("no done line"))
 

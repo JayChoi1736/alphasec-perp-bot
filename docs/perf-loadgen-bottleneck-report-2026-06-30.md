@@ -382,3 +382,43 @@ Current diagnosis remains:
 ```text
 maker_adaptive reduces failed maker traffic, but it does not move max TPS. Current ceiling evidence still points to core transaction sequencing and order-book snapshot/copy work under the present perf/account state. The latest measured clean max remains 146.7 TPS.
 ```
+
+## Final-Only Position Poll Experiment
+
+Optional loadgen change:
+
+```text
+match.py: MATCH_POSITION_POLL_MODE=continuous|final|off
+perf_stages.py: final_poll stage
+```
+
+Reason:
+
+```text
+Continuous position polling is accurate, but it adds read RPC pressure during the load window. final_poll keeps initial position reads, skips continuous position reads during load, then performs one final position poll after load cleanup. TPS denominator is frozen before the final read, so measurement read time is not mixed into load time.
+```
+
+Results:
+
+```text
+summary: docs/perf-stage-summary-final-poll-20260630-073400.md
+baseline target=240: 1910 fills in 31s = 61.6 TPS, taker avg latency=418.8ms, wait=456.1ms
+final_poll target=240: 2190 fills in 31s = 70.6 TPS, taker avg latency=365.7ms, wait=399.1ms
+
+summary: docs/perf-stage-summary-final-poll-sweep-20260630-073539.md
+final_poll target=300: 2150 fills in 31s = 69.3 TPS, taker avg latency=487.1ms, wait=520.7ms
+final_poll target=360: 2069 fills in 31s = 66.6 TPS, taker avg latency=613.4ms, wait=649.2ms
+```
+
+Profile evidence:
+
+```text
+target=300: Sequencer.createBlock 70.42% cum, SequenceTransactions 69.98% cum, SnapshotDirtyTracking/copyBoolMap 60.27% cum, SubmitTransaction 4.84% cum
+target=360: Sequencer.createBlock 70.11% cum, SequenceTransactions 69.50% cum, SnapshotDirtyTracking/copyBoolMap 58.54% cum, SubmitTransaction 4.65% cum
+```
+
+Current diagnosis:
+
+```text
+final_poll improves the current degraded run from 61.6 to 70.6 TPS at target=240 by reducing read pressure, but higher targets still fall as core sequencing latency and maker margin failures rise. It is a useful max-load stage, not a new clean max. Clean max remains 146.7 TPS from the earlier post-GOMAXPROCS run.
+```

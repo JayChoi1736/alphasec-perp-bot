@@ -16,6 +16,8 @@ from match import (
     maker_size_after_error,
     market_depth,
     mode_enabled,
+    normalize_position_poll_mode,
+    record_position_update,
     position_poll_items,
     next_time_nonce_value,
     position_size_from_positions,
@@ -107,6 +109,29 @@ class MatchHelperTest(unittest.TestCase):
     def test_apply_local_fill_tracks_expected_taker_inventory(self):
         self.assertEqual(apply_local_fill(0.00, BUY, 0.001), 0.001)
         self.assertEqual(apply_local_fill(0.00, SELL, 0.001), -0.001)
+
+    def test_record_position_update_accumulates_absolute_delta(self):
+        pos = [0.0, 0.0]
+        prev = [0.0, 0.0]
+        fills = [0.0]
+
+        record_position_update(pos, prev, fills, 1, 0.003)
+        record_position_update(pos, prev, fills, 1, -0.001)
+
+        self.assertEqual(pos[1], -0.001)
+        self.assertEqual(prev[1], -0.001)
+        self.assertEqual(fills[0], 0.007)
+
+    def test_normalize_position_poll_mode_accepts_aliases(self):
+        self.assertEqual(normalize_position_poll_mode("continuous"), "continuous")
+        self.assertEqual(normalize_position_poll_mode("on"), "continuous")
+        self.assertEqual(normalize_position_poll_mode("final"), "final")
+        self.assertEqual(normalize_position_poll_mode("end"), "final")
+        self.assertEqual(normalize_position_poll_mode("off"), "off")
+
+    def test_normalize_position_poll_mode_rejects_unknown_value(self):
+        with self.assertRaises(ValueError):
+            normalize_position_poll_mode("sometimes")
 
     def test_position_poll_items_skip_maker_accounts(self):
         self.assertEqual(position_poll_items(["m0", "m1", "t0", "t1"], 2), [(2, "t0"), (3, "t1")])

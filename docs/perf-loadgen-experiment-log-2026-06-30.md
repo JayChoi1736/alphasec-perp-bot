@@ -187,3 +187,45 @@ Interpretation:
 ```text
 maker_adaptive reduced failed maker traffic but did not materially increase filled TPS. Keep it as an optional loadgen hygiene stage, not as the current max-TPS path.
 ```
+
+## Final-Only Position Poll Experiment
+
+Loadgen change:
+
+```text
+match.py: add MATCH_POSITION_POLL_MODE=continuous|final|off
+match.py: continuous mode now performs one final position poll after load cleanup
+perf_stages.py: add final_poll stage with MATCH_POSITION_POLL_MODE=final and MATCH_INVENTORY_CAP=1.0
+```
+
+Target 240 comparison:
+
+```text
+summary: docs/perf-stage-summary-final-poll-20260630-073400.md
+baseline target=240: 1910 fills in 31s = 61.6 TPS, taker avg latency=418.8ms, wait=456.1ms, maker insufficient-margin=158
+final_poll target=240: 2190 fills in 31s = 70.6 TPS, taker avg latency=365.7ms, wait=399.1ms, maker insufficient-margin=135
+```
+
+Final-poll target sweep:
+
+```text
+summary: docs/perf-stage-summary-final-poll-sweep-20260630-073539.md
+final_poll target=300: 2150 fills in 31s = 69.3 TPS, taker avg latency=487.1ms, wait=520.7ms, maker insufficient-margin=149
+final_poll target=360: 2069 fills in 31s = 66.6 TPS, taker avg latency=613.4ms, wait=649.2ms, maker insufficient-margin=240
+```
+
+Profiles:
+
+```text
+target=300 profile=/tmp/perf-stage-final_poll-t300-20260630-073539.pprof.pb.gz
+Sequencer.createBlock 70.42% cum, SequenceTransactions 69.98% cum, SnapshotDirtyTracking/copyBoolMap 60.27% cum, SubmitTransaction 4.84% cum
+
+target=360 profile=/tmp/perf-stage-final_poll-t360-20260630-073539.pprof.pb.gz
+Sequencer.createBlock 70.11% cum, SequenceTransactions 69.50% cum, SnapshotDirtyTracking/copyBoolMap 58.54% cum, SubmitTransaction 4.65% cum
+```
+
+Interpretation:
+
+```text
+Final-only position polling removes continuous read RPC pressure and improves current target=240 throughput, but it does not recover the old 146.7 TPS clean max. Higher targets now increase taker latency and maker insufficient-margin again. This keeps the bottleneck diagnosis on core transaction sequencing plus dirty order snapshot copy/hash work under the current account state.
+```
