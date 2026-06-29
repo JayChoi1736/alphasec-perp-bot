@@ -3,6 +3,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from perf_stages import (
+    aggregate_worker_results,
     build_pprof_command,
     parse_args,
     parse_done_line,
@@ -11,10 +12,12 @@ from perf_stages import (
     prepare_stage_config,
     parse_target_sweep,
     pprof_profile_url,
+    result_failed,
     run_stage,
     stage_log_stem,
     stage_env,
     stage_should_profile,
+    worker_env,
     write_summary,
 )
 
@@ -257,6 +260,75 @@ class PerfStagesTest(unittest.TestCase):
         self.assertEqual(env["MATCH_MAKER_POOL_COUNT"], "150")
         self.assertEqual(env["MATCH_HEALTHY_MAKER_MIN_FREE"], "500")
         self.assertEqual(env["MATCH_HEALTHY_MAKER_MAX_ABS_POS"], "0.02")
+
+    def test_worker_env_adds_worker_index_and_count(self):
+        env = worker_env({"MATCH_POSITION_POLL_MODE": "final"}, 1, 4)
+
+        self.assertEqual(env["MATCH_POSITION_POLL_MODE"], "final")
+        self.assertEqual(env["MATCH_WORKER_INDEX"], "1")
+        self.assertEqual(env["MATCH_WORKER_COUNT"], "4")
+
+    def test_aggregate_worker_results_sums_parallel_worker_rates(self):
+        result = aggregate_worker_results(
+            "final_poll",
+            300.0,
+            [
+                {
+                    "fills": 627,
+                    "elapsed_s": 31,
+                    "trades_s": 20.2,
+                    "submit_ok": 1245,
+                    "taker_submit_ok": 627,
+                    "maker_submit_ok": 618,
+                    "cancel_ok": 19,
+                    "latency_avg_ms": {
+                        "taker": 878.8,
+                        "taker_sign": 2.5,
+                        "taker_inflight_wait": 907.6,
+                    },
+                    "exit_code": 0,
+                    "timed_out": False,
+                },
+                {
+                    "fills": 627,
+                    "elapsed_s": 31,
+                    "trades_s": 20.2,
+                    "submit_ok": 1216,
+                    "taker_submit_ok": 608,
+                    "maker_submit_ok": 608,
+                    "cancel_ok": 19,
+                    "latency_avg_ms": {
+                        "taker": 879.1,
+                        "taker_sign": 2.5,
+                        "taker_inflight_wait": 912.5,
+                    },
+                    "exit_code": 0,
+                    "timed_out": False,
+                },
+            ],
+        )
+
+        self.assertEqual(result["stage"], "final_poll")
+        self.assertEqual(result["target"], 300.0)
+        self.assertEqual(result["worker_count"], 2)
+        self.assertEqual(result["fills"], 1254)
+        self.assertEqual(result["elapsed_s"], 31)
+        self.assertEqual(result["trades_s"], 40.4)
+        self.assertEqual(result["submit_ok"], 2461)
+        self.assertEqual(result["taker_submit_ok"], 1235)
+        self.assertEqual(result["maker_submit_ok"], 1226)
+        self.assertEqual(result["cancel_ok"], 38)
+        self.assertAlmostEqual(result["latency_avg_ms"]["taker"], 878.9, places=1)
+        self.assertAlmostEqual(
+            result["latency_avg_ms"]["taker_inflight_wait"],
+            910.0,
+            places=1,
+        )
+
+    def test_result_failed_detects_nonzero_exit_or_timeout(self):
+        self.assertFalse(result_failed({"exit_code": 0, "timed_out": False}))
+        self.assertTrue(result_failed({"exit_code": 1, "timed_out": False}))
+        self.assertTrue(result_failed({"exit_code": 0, "timed_out": True}))
 
 
 if __name__ == "__main__":

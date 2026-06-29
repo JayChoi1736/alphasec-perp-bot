@@ -664,3 +664,33 @@ This retest does not change the bottleneck call: local signing is still only
 CPU path is core sequencer block creation plus dirty order snapshot copy/hash
 work.
 ```
+
+## Multi-Worker Runner Update
+
+New loadgen evidence:
+
+```text
+code: perf_stages.py --workers, accounts.py atomic/no-op keystore persistence
+summary: docs/perf-stage-summary-workers-fixed-20260630-083515.md
+workers=2 target=300 final_poll: 41.6 TPS, taker avg=855.2ms, sign avg=2.5ms, wait avg=885.6ms
+
+summary: docs/perf-stage-summary-workers4-fixed-20260630-083617.md
+workers=4 target=300 final_poll: 38.1 TPS, taker avg=956.6ms, sign avg=3.3ms, wait avg=976.7ms
+```
+
+Root cause fixed in loadgen:
+
+```text
+Concurrent stage workers could race on accounts.perf.json because
+load_or_create() rewrote the keystore even when no account was generated.
+This caused a worker JSONDecodeError and a partial/misleading aggregate run.
+```
+
+Updated diagnosis:
+
+```text
+Multi-worker fanout raises the current degraded-state TPS from 36.7 to 41.6,
+but scaling stops by workers=4. This is a loadgen robustness improvement, not
+a new ceiling. The remaining limiter is still core-side sequencing/snapshot
+work, with local signing staying around 2.5-3.3ms.
+```

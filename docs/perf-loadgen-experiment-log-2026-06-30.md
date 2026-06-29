@@ -532,3 +532,49 @@ post-GOMAXPROCS fix run. The current profile still points at core sequencing
 plus dirty snapshot copy/hash work, not local signing or RPC admission as the
 primary bottleneck.
 ```
+
+## Stage Runner Multi-Worker Experiment
+
+Loadgen changes:
+
+```text
+perf_stages.py: add --workers to launch MATCH_WORKER_INDEX/COUNT subprocesses and aggregate DONE lines.
+accounts.py: avoid rewriting an existing keystore when no new accounts are needed; write generated accounts through os.replace() to avoid multi-worker JSON read/write races.
+perf_stages.py: return non-zero when a worker exits non-zero or times out.
+test_accounts.py/test_perf_stages.py: cover keystore no-rewrite, worker env, aggregate summary, and failed result detection.
+```
+
+Root cause found during the first runner test:
+
+```text
+worker 1 crashed in accounts.py json.load(open(path)) with JSONDecodeError.
+Cause: load_or_create() always opened the keystore with "w" after load, even when created=0. Parallel workers could read while another worker had truncated the file.
+Fix: only persist when created>0, and persist with a per-process temp file plus os.replace().
+```
+
+Commands after fix:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 30 --stages final_poll --workers 2 --log-dir /tmp --summary docs/perf-stage-summary-workers-fixed-20260630-083515.md --stage-timeout 180 --env MATCH_INVENTORY_CAP=1.0
+
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 30 --stages final_poll --workers 4 --log-dir /tmp --summary docs/perf-stage-summary-workers4-fixed-20260630-083617.md --stage-timeout 180 --env MATCH_INVENTORY_CAP=1.0
+```
+
+Results:
+
+```text
+workers=2 target=300: 1293 fills in 31s = 41.6 TPS, taker avg=855.2ms, taker sign avg=2.5ms, wait avg=885.6ms
+workers=4 target=300: 1182 fills in 31s = 38.1 TPS, taker avg=956.6ms, taker sign avg=3.3ms, wait avg=976.7ms
+```
+
+Interpretation:
+
+```text
+Multi-worker fanout is now repeatable and no longer races on the keystore.
+It improves over the current single-process target=300 result (36.7 TPS) but
+does not keep scaling: workers=4 is lower than workers=2. This supports the
+same bottleneck diagnosis: local process fanout is not the main limiter once
+core/RPC sequencing wait dominates. Keep --workers for reproducible fanout
+experiments; current best clean runner setting in this degraded account/core
+state is workers=2 at 41.6 TPS.
+```

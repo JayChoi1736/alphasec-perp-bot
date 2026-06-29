@@ -266,6 +266,260 @@ def stage_should_profile(args, stage_name):
     return "all" in stages or stage_name in stages
 
 
+AGGREGATE_COUNTERS = (
+    "fills",
+    "submit_ok",
+    "taker_submit_ok",
+    "maker_submit_ok",
+    "taker_sent",
+    "cancel_ok",
+    "maker_refresh_skipped",
+    "maker_cooldown",
+    "maker_cooldown_skipped",
+    "prep_skipped",
+    "health_maker_skipped",
+    "book_guard_ok",
+)
+
+
+def worker_env(overrides, worker_index, worker_count):
+    env = dict(overrides)
+    env["MATCH_WORKER_INDEX"] = str(worker_index)
+    env["MATCH_WORKER_COUNT"] = str(worker_count)
+    return env
+
+
+def latency_weight(result, key):
+    if key in ("taker", "taker_inflight_wait"):
+        return result.get("taker_submit_ok") or result.get("taker_sent") or 0
+    if key == "taker_sign":
+        return result.get("taker_sent") or result.get("taker_submit_ok") or 0
+    if key in ("maker", "maker_sign"):
+        return result.get("maker_submit_ok") or 0
+    if key in ("cancel", "cancel_sign"):
+        return result.get("cancel_ok") or 0
+    return 1
+
+
+def aggregate_latency(worker_results):
+    keys = set()
+    for result in worker_results:
+        keys.update(result.get("latency_avg_ms", {}).keys())
+
+    latency = {}
+    for key in sorted(keys):
+        total = 0.0
+        weight_total = 0
+        fallback_values = []
+        for result in worker_results:
+            value = result.get("latency_avg_ms", {}).get(key)
+            if value is None:
+                continue
+            weight = latency_weight(result, key)
+            if weight:
+                total += float(value) * weight
+                weight_total += weight
+            else:
+                fallback_values.append(float(value))
+        if weight_total:
+            latency[key] = round(total / weight_total, 1)
+        elif fallback_values:
+            latency[key] = round(sum(fallback_values) / len(fallback_values), 1)
+    return latency
+
+
+def aggregate_worker_results(stage_name, target, worker_results):
+    result = {
+        "stage": stage_name,
+        "target": float(target),
+        "worker_count": len(worker_results),
+        "workers": worker_results,
+        "timed_out": any(worker.get("timed_out") for worker in worker_results),
+        "exit_code": max((worker.get("exit_code", 0) for worker in worker_results), default=0),
+    }
+    for key in AGGREGATE_COUNTERS:
+        if any(key in worker for worker in worker_results):
+            result[key] = sum(int(worker.get(key, 0)) for worker in worker_results)
+    elapsed_values = [worker.get("elapsed_s") for worker in worker_results if worker.get("elapsed_s") is not None]
+    if elapsed_values:
+        result["elapsed_s"] = max(elapsed_values)
+    if any("trades_s" in worker for worker in worker_results):
+        result["trades_s"] = round(sum(float(worker.get("trades_s", 0.0)) for worker in worker_results), 1)
+    latency = aggregate_latency(worker_results)
+    if latency:
+        result["latency_avg_ms"] = latency
+    return result
+
+
+def result_failed(result):
+    return bool(result.get("timed_out")) or int(result.get("exit_code", 0) or 0) != 0
+
+
+def run_stage_workers(
+    stage_name,
+    args,
+    stem,
+    config,
+    command,
+    overrides,
+    pprof_enabled,
+    pprof_profile,
+    pprof_log,
+    pprof_command,
+):
+    worker_count = int(args.workers)
+    log_glob = Path(args.log_dir) / f"{stem}-w*.log"
+    worker_specs = []
+    for worker_index in range(worker_count):
+        worker_overrides = worker_env(overrides, worker_index, worker_count)
+        worker_specs.append(
+            {
+                "worker_index": worker_index,
+                "log": str(Path(args.log_dir) / f"{stem}-w{worker_index}.log"),
+                "command": command,
+                "env": worker_overrides,
+            }
+        )
+
+    if args.dry_run:
+        result = {
+            "stage": stage_name,
+            "description": STAGES[stage_name]["description"],
+            "target": float(args.target),
+            "log": str(log_glob),
+            "command": command,
+            "env": overrides,
+            "worker_count": worker_count,
+            "workers": worker_specs,
+            "dry_run": True,
+        }
+        if pprof_enabled:
+            result.update(
+                {
+                    "pprof_profile": str(pprof_profile),
+                    "pprof_log": str(pprof_log),
+                    "pprof_command": pprof_command,
+                }
+            )
+        return result
+
+    Path(args.log_dir).mkdir(parents=True, exist_ok=True)
+    processes = []
+    threads = []
+    codes = {}
+    timed_out = False
+    pprof_process = None
+    pprof_output = None
+    pprof_exit_code = None
+    pprof_lock = threading.Lock()
+
+    def maybe_start_pprof():
+        nonlocal pprof_process, pprof_output
+        if not pprof_enabled or pprof_process is not None:
+            return
+        with pprof_lock:
+            if pprof_process is not None:
+                return
+            pprof_log.parent.mkdir(parents=True, exist_ok=True)
+            pprof_output = pprof_log.open("w", encoding="utf-8")
+            pprof_process = subprocess.Popen(
+                pprof_command,
+                cwd=args.cwd,
+                stdout=pprof_output,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+
+    def pump_output(process, log_path):
+        with log_path.open("w", encoding="utf-8") as log_file:
+            assert process.stdout is not None
+            for line in process.stdout:
+                log_file.write(line)
+                if line.startswith("ready "):
+                    maybe_start_pprof()
+
+    for spec in worker_specs:
+        env = os.environ.copy()
+        env.update(spec["env"])
+        process = subprocess.Popen(
+            command,
+            cwd=args.cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        log_path = Path(spec["log"])
+        thread = threading.Thread(target=pump_output, args=(process, log_path))
+        thread.start()
+        processes.append((spec["worker_index"], process, log_path))
+        threads.append(thread)
+
+    def kill_on_timeout():
+        nonlocal timed_out
+        alive = [process for _, process, _ in processes if process.poll() is None]
+        if alive:
+            timed_out = True
+            for process in alive:
+                process.kill()
+
+    timeout = args.stage_timeout or max(args.duration + 180.0, args.duration * 3.0)
+    timer = threading.Timer(timeout, kill_on_timeout)
+    timer.start()
+    try:
+        for worker_index, process, _ in processes:
+            codes[worker_index] = process.wait()
+    finally:
+        timer.cancel()
+        for thread in threads:
+            thread.join()
+
+    if pprof_process is not None:
+        try:
+            pprof_exit_code = pprof_process.wait(timeout=args.pprof_seconds + 45.0)
+        except subprocess.TimeoutExpired:
+            pprof_process.kill()
+            pprof_exit_code = pprof_process.wait()
+        if pprof_output is not None:
+            pprof_output.close()
+
+    worker_results = []
+    for worker_index, _, log_path in processes:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        result = parse_done_text(text) or {}
+        result.update(
+            {
+                "worker_index": worker_index,
+                "log": str(log_path),
+                "exit_code": codes.get(worker_index, 1),
+                "timed_out": timed_out,
+            }
+        )
+        worker_results.append(result)
+
+    result = aggregate_worker_results(stage_name, args.target, worker_results)
+    result.update(
+        {
+            "description": STAGES[stage_name]["description"],
+            "log": str(log_glob),
+            "command": command,
+            "env": overrides,
+        }
+    )
+    if pprof_enabled:
+        result.update(
+            {
+                "pprof_profile": str(pprof_profile),
+                "pprof_log": str(pprof_log),
+                "pprof_command": pprof_command,
+                "pprof_started": pprof_process is not None,
+                "pprof_exit_code": pprof_exit_code,
+            }
+        )
+    return result
+
+
 def run_stage(stage_name, args, timestamp):
     env = os.environ.copy()
     overrides = stage_env(stage_name)
@@ -279,6 +533,22 @@ def run_stage(stage_name, args, timestamp):
     pprof_profile = Path(args.log_dir) / f"{stem}.pprof.pb.gz"
     pprof_log = Path(args.log_dir) / f"{stem}.pprof.log"
     pprof_command = build_pprof_command(args.pprof_url, args.pprof_seconds, pprof_profile) if pprof_enabled else None
+    worker_count = int(getattr(args, "workers", 1) or 1)
+    if worker_count <= 0:
+        raise ValueError("workers must be positive")
+    if worker_count > 1:
+        return run_stage_workers(
+            stage_name,
+            args,
+            stem,
+            config,
+            command,
+            overrides,
+            pprof_enabled,
+            pprof_profile,
+            pprof_log,
+            pprof_command,
+        )
 
     if args.dry_run:
         result = {
@@ -418,6 +688,7 @@ def parse_args(argv):
     parser.add_argument("--python", default=".venv/bin/python")
     parser.add_argument("--cwd", default=str(Path(__file__).resolve().parent))
     parser.add_argument("--stage-timeout", type=float, default=0.0)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--pprof-url", default="")
     parser.add_argument("--pprof-seconds", type=float, default=20.0)
     parser.add_argument("--pprof-stages", default="baseline")
@@ -446,10 +717,20 @@ def main(argv=None):
         print(f"summary: {summary}")
     else:
         for result in results:
-            env = " ".join(f"{key}={value}" for key, value in result["env"].items())
-            command = " ".join(result["command"])
-            print(f"[dry-run] {result['stage']} target={result['target']}: {env} {command} > {result['log']}")
-    return 0
+            if result.get("worker_count", 1) > 1:
+                for worker in result["workers"]:
+                    env = " ".join(f"{key}={value}" for key, value in worker["env"].items())
+                    command = " ".join(worker["command"])
+                    print(
+                        f"[dry-run] {result['stage']} target={result['target']} "
+                        f"worker={worker['worker_index']}/{result['worker_count']}: "
+                        f"{env} {command} > {worker['log']}"
+                    )
+            else:
+                env = " ".join(f"{key}={value}" for key, value in result["env"].items())
+                command = " ".join(result["command"])
+                print(f"[dry-run] {result['stage']} target={result['target']}: {env} {command} > {result['log']}")
+    return 1 if any(result_failed(result) for result in results) else 0
 
 
 if __name__ == "__main__":

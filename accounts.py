@@ -19,7 +19,8 @@ def load_or_create(path, group, n):
     """Return n {address,key} dicts for `group`, generating + persisting any missing."""
     data = {}
     if os.path.exists(path):
-        data = json.load(open(path))
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
     g = data.get(group, [])
     created = 0
     while len(g) < n:
@@ -27,9 +28,13 @@ def load_or_create(path, group, n):
         k = a.key.hex()
         g.append({"address": a.address, "key": k if k.startswith("0x") else "0x" + k})
         created += 1
-    data[group] = g
-    json.dump(data, open(path, "w"), indent=2)
     if created:
+        data[group] = g
+        tmp_path = f"{path}.tmp.{os.getpid()}"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp_path, path)
         print(f"keystore {path}: generated {created} new '{group}' account(s) (total {len(g)})")
     return g[:n]
 
