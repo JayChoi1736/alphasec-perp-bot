@@ -31,17 +31,40 @@ Clean max remains `146.7 trades/s`.
 | `MATCH_MAKER_CANCEL_EVERY=1` | `63.3 TPS` | `/tmp/perf-manual-cancel-every1-20260630-065353.log` | Reject. It removed margin errors but cancel traffic reduced fill throughput. |
 | `MATCH_LEVELS=1` | `76.1 TPS` | `/tmp/perf-manual-levels1-20260630-065453.log` | Reject. Lower open-order notional reduced submit pressure and did not recover TPS. |
 | Existing accounts, `MATCH_INVENTORY_CAP=0.01` | `71.4 TPS` | `/tmp/perf-manual-cap001-existing-20260630-065616.log` | Reject. Taker inventory stayed bounded, but maker insufficient-margin errors persisted. |
+| Fresh accounts, `MATCH_GAS_ETH=0.0005`, default deposit/cap smoke | `11.4 TPS` | `/tmp/perf-manual-fresh-lowgas-20260630-065924.log` | Reject for TPS. Useful finding: low-gas fresh account creation/funding works. |
+| Fresh accounts, low gas, `deposit=500`, `cap=0.005`, `maker_size=0.005` | `28.5 TPS` | `/tmp/perf-manual-fresh-lowgas-cap005-20260630-070012.log` | Reject. Maker insufficient-margin persisted because maker order notional was still too high. |
+| Fresh accounts, low gas, `deposit=500`, `cap=0.005`, `maker_size=0.001` | `29.2 TPS` | `/tmp/perf-manual-fresh-lowgas-makersmall-20260630-070100.log` | Reject. Margin was cleaner, but maker liquidity/submit pressure was too low. |
+| `perf_stages.py --fresh-keystore-dir` smoke with low-gas env overrides | `27.1 TPS` | `docs/perf-stage-summary-fresh-runner-smoke-2026-06-30.md` | Reject for TPS. Useful finding: staged runner can now create isolated fresh-account configs. |
 
 ## Current Account/Funding State
 
-The perf owner account currently has about `0.09` L2 ETH. That is not enough for another broad fresh-account sweep with the current default gas target (`MATCH_GAS_ETH=0.1` per generated sub-account).
+The perf owner account had about `0.09` L2 ETH before the low-gas fresh-account smoke tests, about `0.045` L2 ETH after the manual low-gas tests, and about `0.03` L2 ETH after the staged fresh-runner smoke. That is not enough for another broad fresh-account sweep with the current default gas target (`MATCH_GAS_ETH=0.1` per generated sub-account).
 
 ```text
 owner: 0xE1A44ca6F8c577458232A59080D0DC6A22419c33
 eth_balance: 0.09
+eth_balance_after_lowgas_smoke: 0.045
+eth_balance_after_fresh_runner_smoke: 0.03
 ```
 
 The current low-TPS runs are dominated by maker-side insufficient-margin errors. Reducing inventory cap, reducing levels, and canceling more often did not restore the earlier clean max.
+
+Fresh account creation can still be done with a smaller gas target:
+
+```text
+MATCH_GAS_ETH=0.0005
+```
+
+However, the low-gas fresh runs did not recover TPS. `maker_size=0.005` still exhausted maker margin, while `maker_size=0.001` reduced margin errors but did not provide enough book depth/submit pressure.
+
+Runner support added:
+
+```text
+perf_stages.py --fresh-keystore-dir <dir>
+perf_stages.py --env KEY=VALUE
+```
+
+These options make isolated-account staged runs reproducible without manually writing temporary config files.
 
 ## Code Changes
 

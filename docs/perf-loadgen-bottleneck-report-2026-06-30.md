@@ -311,7 +311,9 @@ Later retests are no longer reproducing the `146.7 trades/s` clean max. The stro
 MATCH_MAKER_CANCEL_EVERY=1: 1966 fills in 31s = 63.3 trades/s, margin errors removed but cancel traffic dominated
 MATCH_LEVELS=1: 2359 fills in 31s = 76.1 trades/s
 MATCH_INVENTORY_CAP=0.01: 3290 fills in 46s = 71.4 trades/s, maker insufficient-margin errors persisted
-owner L2 ETH: ~0.09, not enough for another broad fresh-account sweep with MATCH_GAS_ETH=0.1
+owner L2 ETH: ~0.03 after low-gas fresh-account smoke tests, not enough for another broad fresh-account sweep with MATCH_GAS_ETH=0.1
+fresh low-gas smoke: MATCH_GAS_ETH=0.0005 works for account creation/funding, but measured only 11.4-29.2 trades/s in tested combinations
+fresh runner smoke: perf_stages.py --fresh-keystore-dir works end-to-end, measured 27.1 trades/s with low-gas env overrides
 ```
 
-Interpretation: the earlier clean ceiling remains the best measured max, but the current account set is not clean enough for a fair max search. A next clean run should either fund the owner for fresh sub-accounts with a lower gas target, or explicitly reset/replace the current maker accounts before comparing TPS again.
+Interpretation: the earlier clean ceiling remains the best measured max, but the current account set is not clean enough for a fair max search. A next clean run should fund the owner for fresh sub-accounts and then use the new `--fresh-keystore-dir` / `--env` runner options with a better maker sizing/depth strategy before comparing TPS again.

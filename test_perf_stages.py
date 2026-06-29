@@ -1,3 +1,4 @@
+import json
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -6,6 +7,8 @@ from perf_stages import (
     parse_args,
     parse_done_line,
     parse_done_text,
+    parse_env_overrides,
+    prepare_stage_config,
     parse_target_sweep,
     pprof_profile_url,
     run_stage,
@@ -60,6 +63,16 @@ class PerfStagesTest(unittest.TestCase):
 
     def test_parse_done_text_returns_none_when_missing_done_line(self):
         self.assertIsNone(parse_done_text("no done line"))
+
+    def test_parse_env_overrides_accepts_key_value_pairs(self):
+        self.assertEqual(
+            parse_env_overrides(["MATCH_GAS_ETH=0.0005", "MATCH_MAKER_SIZE=0.001"]),
+            {"MATCH_GAS_ETH": "0.0005", "MATCH_MAKER_SIZE": "0.001"},
+        )
+
+    def test_parse_env_overrides_rejects_missing_separator(self):
+        with self.assertRaises(ValueError):
+            parse_env_overrides(["MATCH_GAS_ETH"])
 
     def test_parse_args_accepts_stage_timeout(self):
         args = parse_args(["--stage-timeout", "12.5"])
@@ -183,6 +196,22 @@ class PerfStagesTest(unittest.TestCase):
         self.assertIn("| Profile |", text)
         self.assertIn("| baseline | 300.0 |", text)
         self.assertIn("/tmp/profile.pb.gz", text)
+
+
+    def test_prepare_stage_config_writes_fresh_keystore_config(self):
+        with TemporaryDirectory() as tmp:
+            base_config = f"{tmp}/config.perf.json"
+            fresh_dir = f"{tmp}/fresh"
+            with open(base_config, "w", encoding="utf-8") as handle:
+                json.dump({"rpc_url": "https://rpc", "keystore": "accounts.perf.json"}, handle)
+
+            prepared = prepare_stage_config(base_config, fresh_dir, "perf-stage-baseline-ts", write=True)
+
+            self.assertEqual(prepared, f"{fresh_dir}/perf-stage-baseline-ts.config.json")
+            with open(prepared, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual(data["rpc_url"], "https://rpc")
+            self.assertEqual(data["keystore"], f"{fresh_dir}/perf-stage-baseline-ts.accounts.json")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 import argparse
 import ast
 import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -123,8 +124,37 @@ def stage_env(stage_name):
     return env
 
 
+def parse_env_overrides(items):
+    overrides = {}
+    for item in items or []:
+        if "=" not in item:
+            raise ValueError(f"env override must be KEY=VALUE: {item}")
+        key, value = item.split("=", 1)
+        if not key:
+            raise ValueError(f"env override key cannot be empty: {item}")
+        overrides[key] = value
+    return overrides
+
+
 def build_command(python_bin, config, target, duration):
     return [python_bin, "match.py", config, str(target), str(duration)]
+
+
+def prepare_stage_config(config, fresh_keystore_dir, stem, write=True):
+    if not fresh_keystore_dir:
+        return config
+    fresh_dir = Path(fresh_keystore_dir)
+    config_path = fresh_dir / f"{stem}.config.json"
+    keystore_path = fresh_dir / f"{stem}.accounts.json"
+    if write:
+        fresh_dir.mkdir(parents=True, exist_ok=True)
+        with open(config, encoding="utf-8") as handle:
+            data = json.load(handle)
+        data["keystore"] = str(keystore_path)
+        with config_path.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.write("\n")
+    return str(config_path)
 
 
 def parse_target_sweep(default_target, target_sweep):
@@ -183,9 +213,11 @@ def stage_should_profile(args, stage_name):
 def run_stage(stage_name, args, timestamp):
     env = os.environ.copy()
     overrides = stage_env(stage_name)
+    overrides.update(parse_env_overrides(args.env))
     env.update(overrides)
-    command = build_command(args.python, args.config, args.target, args.duration)
     stem = stage_log_stem(stage_name, timestamp, args.target, bool(args.target_sweep))
+    config = prepare_stage_config(args.config, args.fresh_keystore_dir, stem, write=not args.dry_run)
+    command = build_command(args.python, config, args.target, args.duration)
     log_path = Path(args.log_dir) / f"{stem}.log"
     pprof_enabled = stage_should_profile(args, stage_name)
     pprof_profile = Path(args.log_dir) / f"{stem}.pprof.pb.gz"
@@ -325,6 +357,8 @@ def parse_args(argv):
     parser.add_argument("--stages", default="baseline,wide_accounts,time_inflight2,maker_guard")
     parser.add_argument("--log-dir", default="/tmp")
     parser.add_argument("--summary")
+    parser.add_argument("--fresh-keystore-dir", default="")
+    parser.add_argument("--env", action="append", default=[], help="Override match.py environment as KEY=VALUE")
     parser.add_argument("--python", default=".venv/bin/python")
     parser.add_argument("--cwd", default=str(Path(__file__).resolve().parent))
     parser.add_argument("--stage-timeout", type=float, default=0.0)
