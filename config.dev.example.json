@@ -1,7 +1,7 @@
 {
   "rpc_url": "http://localhost:8547",
   "dex_address": "0x00000000000000000000000000000000000000cc",
-  "market_id": 22,
+  "market_id": 1,
   "leverage": 10,
   "margin_type": 0,
   "interval": 2,
@@ -12,7 +12,10 @@
     "spread": 0.001,
     "order_size": 0.01,
     "levels": 5,
-    "level_step": 0.001
+    "level_step": 0.001,
+    "inventory_cap": 0.5,
+    "match_tps": 20,
+    "match_deposit": 100000
   },
   "taker": {
     "private_key": "0xTAKER_PRIVATE_KEY  # a second funded account",

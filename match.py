@@ -34,7 +34,7 @@ def main():
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("match_duration", 0))
     per_acct = float(cfg.get("per_account_tps", 4))
     lev = int(cfg["leverage"])
-    deposit = float(cfg.get("match_deposit", 50000))
+    deposit = float(cfg.get("match_deposit", 100000))
     size = float(cfg.get("order_size", 0.01))
     cap = float(cfg.get("inventory_cap", 0.5))        # max |position| per account (base units)
     spread = float(cfg.get("spread", 0.0005))         # maker offset (< taker_slippage)
@@ -113,17 +113,20 @@ def main():
             time.sleep(1)
 
     def maker_loop(idx, a):
-        # always quote both sides. This is a closed system (maker position =
-        # -taker position), so the takers reversing at ±cap keeps maker inventory
-        # mirrored and bounded too. Throttling a maker side here instead starves
-        # the takers (no bid to hit) and deadlocks mid-band.
-        nxt = time.time()
+        # Quote both sides (closed system: maker pos = -taker pos, so takers
+        # reversing at ±cap bounds maker inventory too). Periodically cancel_all:
+        # whichever side the takers aren't currently hitting piles up unbought and
+        # would otherwise lock all the maker's margin in stale resting orders.
+        nxt, k = time.time(), 0
         while not stop.is_set():
             try:
+                if k % 10 == 0:                        # clear stale resting orders
+                    a.cancel_all(mid, wait=False)
                 a.order(mid, SELL, mk_ask, size, tif=POST, wait=False)
                 a.order(mid, BUY, mk_bid, size, tif=POST, wait=False)
             except Exception:
                 a.resync_nonce()
+            k += 1
             nxt += dt
             sl = nxt - time.time()
             if sl > 0:
