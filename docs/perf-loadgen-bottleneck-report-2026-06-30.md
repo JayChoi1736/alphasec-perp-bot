@@ -235,3 +235,47 @@ go tool pprof -top -cum -nodefraction=0 /tmp/perf-stage-baseline-20260630-060150
 ```
 
 No core code changes were made.
+
+## Retest After Local Docs Commit
+
+Push status:
+
+```text
+git push origin main
+ERROR: Permission to JayChoi1736/alphasec-perp-bot.git denied to probepark.
+viewerPermission: READ
+```
+
+Retest command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 360 --duration 45 --stages baseline,maker_guard --summary docs/perf-stage-summary-retest-2026-06-30.md --stage-timeout 240 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages baseline,maker_guard
+```
+
+Latest clean retest:
+
+```text
+summary: docs/perf-stage-summary-retest-2026-06-30.md
+baseline: 6144 fills in 46s = 133.5 trades/s
+maker_guard: 5193 fills in 46s = 112.8 trades/s
+```
+
+Latest pprof evidence:
+
+```text
+baseline profile: /tmp/perf-stage-baseline-20260630-061402.pprof.pb.gz
+Duration: 20.17s, Total samples = 19.20s
+Sequencer.createBlock: 10.09s / 52.55% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 10.01s / 52.14% cum
+OrderBook.SnapshotDirtyTracking: 5.68s / 29.58% cum
+SubmitTransaction: 1.91s / 9.95% cum
+
+maker_guard profile: /tmp/perf-stage-maker_guard-20260630-061402.pprof.pb.gz
+Duration: 20.13s, Total samples = 18.95s
+Sequencer.createBlock: 11.18s / 59.00% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 11.06s / 58.36% cum
+OrderBook.SnapshotDirtyTracking: 8.57s / 45.22% cum
+SubmitTransaction: 1.47s / 7.76% cum
+```
+
+Current clean max remains `146.7 trades/s`. Experimental `time_inflight2` reached `150.2 trades/s`, but it produced two taker nonce errors, so it is not counted as the clean ceiling.
