@@ -113,14 +113,15 @@ def main():
             time.sleep(1)
 
     def maker_loop(idx, a):
+        # always quote both sides. This is a closed system (maker position =
+        # -taker position), so the takers reversing at ±cap keeps maker inventory
+        # mirrored and bounded too. Throttling a maker side here instead starves
+        # the takers (no bid to hit) and deadlocks mid-band.
         nxt = time.time()
         while not stop.is_set():
-            p = pos[idx]
             try:
-                if p > -cap:                           # room to go shorter -> offer ask
-                    a.order(mid, SELL, mk_ask, size, tif=POST, wait=False)
-                if p < cap:                            # room to go longer -> offer bid
-                    a.order(mid, BUY, mk_bid, size, tif=POST, wait=False)
+                a.order(mid, SELL, mk_ask, size, tif=POST, wait=False)
+                a.order(mid, BUY, mk_bid, size, tif=POST, wait=False)
             except Exception:
                 a.resync_nonce()
             nxt += dt
