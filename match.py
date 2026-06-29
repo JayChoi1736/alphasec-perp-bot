@@ -17,6 +17,7 @@ taker side (net position oscillates, so a net read would undercount).
 duration 0 = run until Ctrl-C.
 """
 import math
+import os
 import sys
 import threading
 import time
@@ -33,11 +34,14 @@ def main():
     cfg = load_role_config(path, "maker")
     target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("match_tps", 20))
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("match_duration", 0))
-    per_acct = float(cfg.get("per_account_tps", 4))
+    per_acct = float(os.environ.get("MATCH_PER_ACCOUNT_TPS", cfg.get("per_account_tps", 4)))
     lev = int(cfg["leverage"])
-    deposit = float(cfg.get("match_deposit", 100000))
+    deposit = float(os.environ.get("MATCH_DEPOSIT", cfg.get("match_deposit", 100000)))
+    gas_eth = float(os.environ.get("MATCH_GAS_ETH", cfg.get("match_gas_eth", 1.0)))
     size = float(cfg.get("order_size", 0.01))
-    cap = float(cfg.get("inventory_cap", 0.5))        # max |position| per account (base units)
+    maker_size = float(os.environ.get("MATCH_MAKER_SIZE", cfg.get("maker_order_size", size)))
+    taker_size = float(os.environ.get("MATCH_TAKER_SIZE", cfg.get("taker_order_size", size)))
+    cap = float(os.environ.get("MATCH_INVENTORY_CAP", cfg.get("inventory_cap", 0.5)))        # max |position| per account (base units)
     spread = float(cfg.get("spread", 0.0005))         # maker offset (< taker_slippage)
     slip = float(cfg.get("taker_slippage", 0.01))
     mid = cfg["market_id"]
@@ -52,14 +56,15 @@ def main():
     lo, hi = band_bounds(mark, band_bps)
     q = lambda x: round(x / tick) * tick
     # maker ladder: match_levels price points per side (richer-looking book)
-    mlevels = int(cfg.get("match_levels", 1))
+    mlevels = int(os.environ.get("MATCH_LEVELS", cfg.get("match_levels", 1)))
     mstep = float(cfg.get("level_step", 0.001))
     mk_asks = [q(mark * (1 + spread + k * mstep)) for k in range(mlevels)]
     mk_bids = [q(mark * (1 - spread - k * mstep)) for k in range(mlevels)]
     tk_buy = min(math.floor(hi / tick) * tick - tick, q(mark * (1 + slip)))
     tk_sell = max(math.ceil(lo / tick) * tick + tick, q(mark * (1 - slip)))
     print(f"match: target={target} trades/s -> {pairs} maker + {pairs} taker, market={mid} "
-          f"mark={mark} cap=+/-{cap} levels={mlevels} bids={mk_bids[0]}..{mk_bids[-1]} "
+          f"mark={mark} cap=+/-{cap} levels={mlevels} maker_size={maker_size} taker_size={taker_size} "
+          f"bids={mk_bids[0]}..{mk_bids[-1]} "
           f"asks={mk_asks[0]}..{mk_asks[-1]} tkbuy/sell={tk_buy}/{tk_sell}")
 
     # persistent keystore (generate missing) + top up gas/deposit to targets
@@ -67,15 +72,18 @@ def main():
     makers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "maker", pairs)]
     takers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "taker", pairs)]
     allacct = makers + takers
-    ensure_funded(dev, allacct, gas_eth=1.0, deposit=deposit)
+    ensure_funded(dev, allacct, gas_eth=gas_eth, deposit=deposit)
 
     def prep(a):  # clear stale orders from prior runs, set leverage, prime nonce
-        try:
-            a.cancel_all(mid)
-            a.set_leverage(mid, lev)
-            a.prime()
-        except Exception as e:
-            print("prep warn", a.address[:10], e)
+        for name, fn in (
+            ("cancel_all", lambda: a.cancel_all(mid)),
+            ("set_leverage", lambda: a.set_leverage(mid, lev)),
+        ):
+            try:
+                fn()
+            except Exception as e:
+                print("prep warn", name, a.address[:10], e)
+        a.prime()
     ts = [threading.Thread(target=prep, args=(a,)) for a in allacct]
     [t.start() for t in ts]
     [t.join() for t in ts]
@@ -122,9 +130,9 @@ def main():
                 if k % 10 == 0:                        # clear stale resting orders
                     a.cancel_all(mid, wait=False)
                 for px in mk_asks:                     # ladder both sides
-                    a.order(mid, SELL, px, size, tif=POST, wait=False)
+                    a.order(mid, SELL, px, maker_size, tif=POST, wait=False)
                 for px in mk_bids:
-                    a.order(mid, BUY, px, size, tif=POST, wait=False)
+                    a.order(mid, BUY, px, maker_size, tif=POST, wait=False)
             except Exception:
                 a.resync_nonce()
             k += 1
@@ -146,7 +154,7 @@ def main():
                 d = BUY
             px = tk_buy if d == BUY else tk_sell
             try:
-                a.order(mid, d, px, size, tif=IOC, wait=False)
+                a.order(mid, d, px, taker_size, tif=IOC, wait=False)
             except Exception:
                 a.resync_nonce()
             nxt += dt
@@ -164,14 +172,14 @@ def main():
             time.sleep(5)
             el = time.time() - t0
             inv = [pos[pairs + i] for i in range(pairs)]
-            print(f"t={el:.0f}s trades={fills[0] / size:.0f} rate={fills[0] / size / el:.1f}/s "
+            print(f"t={el:.0f}s trades={fills[0] / taker_size:.0f} rate={fills[0] / taker_size / el:.1f}/s "
                   f"taker_inv=[{min(inv):+.2f},{max(inv):+.2f}] (cap +/-{cap})")
     except KeyboardInterrupt:
         pass
     stop.set()
     time.sleep(1.5)
     el = time.time() - t0
-    print(f"DONE: {fills[0] / size:.0f} fills in {el:.0f}s = {fills[0] / size / el:.1f} trades/s; "
+    print(f"DONE: {fills[0] / taker_size:.0f} fills in {el:.0f}s = {fills[0] / taker_size / el:.1f} trades/s; "
           f"final taker_inv range [{min(pos[pairs:]):+.2f},{max(pos[pairs:]):+.2f}]")
 
 
