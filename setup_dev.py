@@ -23,7 +23,21 @@ def main():
     mid = common["market_id"]
     w3 = dev.w3
 
-    # 1) ensure oracle price (dev key is an OracleSubmitter in dev mode)
+    # 0) grant the dev key the OracleSubmitter role (chain owner can; idempotent)
+    arbowner = w3.eth.contract(
+        address=w3.to_checksum_address("0x0000000000000000000000000000000000000070"),
+        abi=[{"name": "addOracleSubmitter", "type": "function", "stateMutability": "nonpayable",
+              "inputs": [{"name": "s", "type": "address"}], "outputs": []},
+             {"name": "isOracleSubmitter", "type": "function", "stateMutability": "view",
+              "inputs": [{"name": "a", "type": "address"}], "outputs": [{"type": "bool"}]}])
+    if not arbowner.functions.isOracleSubmitter(dev.address).call():
+        tx = arbowner.functions.addOracleSubmitter(dev.address).build_transaction(
+            {"from": dev.address, "nonce": w3.eth.get_transaction_count(dev.address),
+             "gas": 300000, "gasPrice": w3.eth.gas_price, "chainId": w3.eth.chain_id})
+        w3.eth.wait_for_transaction_receipt(w3.eth.send_raw_transaction(dev.acct.sign_transaction(tx).raw_transaction))
+        print("granted OracleSubmitter to dev key")
+
+    # 1) ensure oracle price
     px = to_wei_str(common["ref_price"])
     r = dev._send(0x4C, {"l1owner": dev.address, "marketId": int(mid),
                          "indexPrice": px, "cexPerpPrice": px})

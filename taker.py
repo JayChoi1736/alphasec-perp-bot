@@ -35,8 +35,10 @@ def main():
 
     if float(cfg.get("deposit", 0)) > 0:
         c.deposit(cfg["deposit"])
-    c.cancel_all(mid)  # leverage/margin changes are rejected with resting orders
-    for fn in (lambda: c.set_leverage(mid, lev), lambda: c.set_margin_type(mid, int(cfg["margin_type"]))):
+    # clear stale orders first (leverage/margin changes reject with resting orders)
+    for fn in (lambda: c.cancel_all(mid),
+               lambda: c.set_leverage(mid, lev),
+               lambda: c.set_margin_type(mid, int(cfg["margin_type"]))):
         try:
             fn()
         except Exception as e:

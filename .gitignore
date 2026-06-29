@@ -1,8 +1,6 @@
-# real configs hold private keys — never commit; use the *.example.json templates
-config.json
-config.dev.json
-config.tps.json
-config.local.json
+# real configs hold private keys — never commit; only *.example.json templates are tracked
+config*.json
+!config*.example.json
 
 .venv/
 __pycache__/

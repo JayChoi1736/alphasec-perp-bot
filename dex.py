@@ -80,7 +80,7 @@ def _to_int(v):
     if v is None:
         return 0
     if isinstance(v, str):
-        return int(v, 16) if v.startswith("0x") else int(v or "0")
+        return int(v, 16) if v.lstrip("-").startswith("0x") else int(v or "0")
     return int(v)
 
 

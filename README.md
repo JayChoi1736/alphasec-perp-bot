@@ -1,75 +1,134 @@
 # alphasec-perp-bot
 
-Minimal perp maker/taker bots that talk straight to a core node over JSON-RPC.
-Primary use: generate maker/taker flow to exercise the core matching/funding/
-settlement paths (local dev node or QA). Not a trading strategy.
+Minimal Python bots that drive a perp DEX core node directly over JSON-RPC —
+for market-making, taker flow, orderbook watching, and load testing. Not a
+trading strategy; it exercises the core matching / funding / settlement paths.
 
-A DEX tx is `0x<cmd byte><utf8 JSON>` sent to the DEX precompile — ported from
-`nitro-testnode/tests/helpers.js`. Per-command field encoding (verified against a
-live node, see `dex.py` header):
+A DEX tx is `0x<cmd byte><utf8 JSON>` sent to the DEX precompile (`0x…cc`),
+ported from `nitro-testnode/tests/helpers.js`.
 
-| field | encoding |
-|-------|----------|
-| order `price`/`quantity` | **human decimal string** (`"39960"`, `"0.01"`) — engine scales ×1e18 |
-| deposit `amount` | **wei integer string** (uint256) |
-| transfer `value` | human decimal string |
-| `marketId`/`side`/`leverage`/`timeInForce` | bare ints |
+## Files
+| file | what it does |
+|------|--------------|
+| `dex.py` | `PerpDexClient` — encode/sign/send DEX commands, read RPC (account, lvl2, oracle, market info) |
+| `maker.py` | multi-level ladder market-maker (mark-band clamped, drift-based requote) |
+| `taker.py` | alternating IOC crosser |
+| `watch.py` | live orderbook depth/trade stream over WebSocket (ms timestamps) |
+| `load.py` | **throughput** load — N accounts spam IOC orders to hit a target tx/s |
+| `match.py` | **matched** load — maker/taker account pairs producing real fills, measures trade/s |
+| `setup_dev.py` | local-dev helper: oracle price + fund the taker account |
+| `test_encode.py` | wire-format byte check (no deps) |
 
 ## Setup
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp config.example.json config.json          # QA template; fill in private keys
+cp config.example.json config.json          # QA template
 # cp config.dev.example.json config.dev.json # local dev template
 ```
-Real configs (`config.json`, `config.dev.json`, …) hold private keys and are
+Real configs (`config.json`, `config.dev.json`) hold private keys and are
 **git-ignored**. Only the `*.example.json` templates (placeholder keys) are committed.
 
-## Config (one file, two roles)
-Common keys at top level; `maker` / `taker` blocks override per role (each is a
-separate account so they actually match each other):
+## Config
+One file, common keys at top level + `maker`/`taker` role blocks (separate
+accounts so they match each other):
 ```jsonc
 {
-  "rpc_url": "...", "dex_address": "0x..cc", "market_id": 24,
-  "leverage": 10, "margin_type": 0, "interval": 3, "ref_price": 84,
-  "maker": { "private_key": "0x..", "deposit": 0, "spread": 0.001,
-             "order_size": 0.5, "levels": 5, "level_step": 0.001 },
-  "taker": { "private_key": "0x..", "deposit": 0, "order_size": 0.5, "taker_slippage": 0.01 }
+  "rpc_url": "http://localhost:8547", "dex_address": "0x…cc",
+  "market_id": 1, "leverage": 10, "margin_type": 0, "interval": 2, "ref_price": 40000,
+  "maker": { "private_key": "0x…", "deposit": 0, "spread": 0.001,
+             "order_size": 0.01, "levels": 5, "level_step": 0.001 },
+  "taker": { "private_key": "0x…", "deposit": 0, "order_size": 0.01, "taker_slippage": 0.01 }
 }
 ```
-- `deposit`: 0 = skip (account already funded), >0 = auto-deposit token 2 from spot.
-- `tick_size`/`lot_size`/band are read live from the registry (`getMarket`, with an
-  ABI fallback) — config values are only used if that call fails.
-- maker `levels`/`level_step`: post a ladder of N price levels per side, stepped by
-  `level_step`; the maker only re-quotes when mid drifts, so a quiet book stays full.
-- `tps` (optional, either role): switch to **load mode** — fire-and-forget orders
-  paced to that submit rate (no per-order receipt wait). See below.
+| key | meaning |
+|-----|---------|
+| `deposit` | 0 = skip (already funded); >0 = auto-deposit token 2 from spot |
+| `interval` | seconds between maker/taker ticks |
+| `ref_price` | fallback mid when the book + oracle are empty |
+| maker `spread` / `levels` / `level_step` | inner offset, ladder depth per side, gap between levels |
+| `taker_slippage` | how far past the touch the taker crosses |
+| `tps`, `load_tps`, `per_account_tps`, `match_tps`, `match_deposit` | load-test knobs (below) |
 
-Each bot, at startup: deposit (optional) → cancel stale orders → set leverage/margin
-→ **preflight margin check** (exits if free margin < what its quotes need).
-Each tick it re-reads the **mark price band** and keeps quotes strictly inside it.
+`tick_size`/`lot_size`/price-band are read live from the registry (`getMarket`,
+with an ABI fallback); config values are only used if that call fails.
 
-## Load mode (`tps`)
-Set `tps` on a role to drive a target submit rate. The node caps a *single* account
-at ~1 tx/block (≈4 tx/s on a 250 ms dev node) — submission scales linearly with
-sender accounts, so for higher aggregate TPS run the bot from several funded keys
-in parallel (~4 × N tx/s).
-
-## Run
+## Run the bots
 ```bash
-.venv/bin/python maker.py config.json   # quotes both sides, refreshes each tick
-.venv/bin/python taker.py config.json   # crosses IOC, alternating side
+.venv/bin/python maker.py config.json    # ladder quotes, re-quotes on drift
+.venv/bin/python taker.py config.json    # IOC crosses, alternating side
 ```
+Both, at startup: optional deposit → cancel stale orders → set leverage/margin
+→ **preflight margin check** → loop. Every tick they read the **mark-price band**
+and keep quotes strictly inside it.
+
+## Watch the orderbook (WebSocket)
+```bash
+.venv/bin/python watch.py config.json
+```
+Streams depth diffs + fills with millisecond timestamps (no polling):
+```
+17:09:42.658 [depth m1] bids=[['39960','0.01']] asks=[]   # level added
+17:09:42.911 [depth m1] bids=[] asks=[['40040','0']]       # level removed (cancel or fill)
+```
+Needs the node started with WebSocket enabled (see dev note). Set `market_id` to 0 to watch all markets.
 
 ## Local dev node
+The node must serve HTTP + WS:
 ```bash
-.venv/bin/python setup_dev.py config.dev.json   # oracle price + fund taker (gas + token 2)
+nitro --dev --init.dev-init-address=0x9e0C…9315 \
+  --http.addr=0.0.0.0 --http.api=eth,net,web3,arb,arbdebug,debug,admin,txpool \
+  --ws.addr=0.0.0.0 --ws.port=8548 --ws.api=eth,net,web3,arb,debug
+```
+(nitro has no bare `--ws`; `--ws.addr` enables it.) Then:
+```bash
+.venv/bin/python setup_dev.py config.dev.json   # grant OracleSubmitter, set oracle, fund taker
 .venv/bin/python maker.py config.dev.json &
 .venv/bin/python taker.py config.dev.json
 ```
-`config.dev.json` (from `config.dev.example.json`) targets `http://localhost:8547`,
-market 22; maker uses the nitro `--dev` account, taker a second funded key.
-Verified end-to-end: maker quotes rest, taker crosses, fills open real positions
-and move margin/PnL.
+A fresh `--dev` node has no markets — register one first (e.g. via
+`nitro-testnode/tests` helpers `addMarket`); the first market is id 1.
+
+## Load testing
+
+### Per-account ceiling
+A single sender is capped at **~1 tx/block** (≈4 tx/s on a 250 ms dev node) —
+the node serializes a sender's txs to one per block. Submission scales linearly
+with sender accounts, so both load tools fan out across N ephemeral accounts.
+
+### A) Throughput — `load.py`
+N accounts fire-and-forget IOC orders (cross the band, expire with no fill =
+pure submission load, no margin/state). `N = ceil(tps / per_account_tps)`.
+```bash
+.venv/bin/python load.py config.dev.json <target_tps> [duration_s]
+```
+Measured (dev node, verified by counting on-chain DEX txs = submissions):
+| target | accounts | achieved | on-chain match |
+|--------|----------|----------|----------------|
+| 20  | 5  | 19.8 tx/s | ✓ |
+| 50  | 13 | 50.0 tx/s (5 min) | ✓ 15028≈15041 |
+| 100 | 25 | 98.7 tx/s (5 min) | ✓ 29635=29635 |
+
+### B) Matched — `match.py`
+Splits accounts into maker/taker pairs: makers rest ASKs at mark, takers IOC-BUY
+across them → **real fills**. Trade count is exact: `taker long ÷ order_size`
+(cross-checked against maker short).
+```bash
+.venv/bin/python match.py config.dev.json <target_trades_s> [duration_s]
+```
+Each run uses fresh accounts (gas + token 2 + deposit) so positions start flat.
+Note takers go long monotonically, so margin grows over time — raise `match_deposit`
+or keep runs bounded for high rates. Measured: 20 trades/s target → 19.1 trades/s
+over 30 s, `taker_long == maker_short`.
+
+## Wire encoding (per command, verified against a live node)
+| field | encoding |
+|-------|----------|
+| order `price` / `quantity` | **human decimal string** (`"39960"`, `"0.01"`) — engine scales ×1e18 |
+| deposit `amount` | **wei integer string** (uint256) |
+| transfer `value` | human decimal string |
+| `marketId` / `side` / `leverage` / `timeInForce` | bare ints |
+
+side: 0=buy 1=sell · timeInForce: 0=GTC 1=IOC 2=POST 3=MARKET · marginType: 0=cross 1=isolated
 
 ## Test
 ```bash
@@ -78,4 +137,5 @@ and move margin/PnL.
 
 ## Skipped (add when needed)
 Inventory/risk logic, PnL tracking, reconnect/recovery, TP/SL, modify,
-multi-market. Each is a method or a few lines on `PerpDexClient`.
+multi-market, reduce-only unwinding in `match.py`. Each is a method or a few
+lines on `PerpDexClient`.
