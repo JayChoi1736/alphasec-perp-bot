@@ -422,3 +422,32 @@ Current diagnosis:
 ```text
 final_poll improves the current degraded run from 61.6 to 70.6 TPS at target=240 by reducing read pressure, but higher targets still fall as core sequencing latency and maker margin failures rise. It is a useful max-load stage, not a new clean max. Clean max remains 146.7 TPS from the earlier post-GOMAXPROCS run.
 ```
+
+## Follow-up Current-State Retests
+
+Retests after `final_poll` tried to isolate whether the lower current TPS was
+caused by polluted low-index accounts, maker traffic, broad account fanout,
+maker order size, or per-account in-flight settings.
+
+```text
+slice60 final_poll target=240: 57.6 TPS
+taker-only final_poll target=240: 55.5 TPS
+fanout60 final_poll target=240: 46.1 TPS
+maker-size-0.0025 final_poll target=240: 50.5 TPS
+inflight2 final_poll target=240: 51.5 TPS
+local sweep final_poll target=180: 46.5 TPS
+local sweep final_poll target=220: 52.8 TPS
+local sweep final_poll target=260: 54.1 TPS
+```
+
+Current conclusion:
+
+```text
+These variants did not beat the 70.6 TPS current-state final_poll result and
+do not replace the 146.7 TPS clean max. The local generator is no longer the
+dominant proven bottleneck: signing remains low-millisecond, taker-only traffic
+lowers fills, wider fanout increases latency, and in-flight=2 is not beneficial
+on the clean path. The bottleneck evidence remains core sequencing plus dirty
+snapshot copy/hash work, while maker insufficient-margin churn is the immediate
+reason current retests underperform the clean post-GOMAXPROCS run.
+```

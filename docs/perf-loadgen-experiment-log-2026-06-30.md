@@ -229,3 +229,43 @@ Interpretation:
 ```text
 Final-only position polling removes continuous read RPC pressure and improves current target=240 throughput, but it does not recover the old 146.7 TPS clean max. Higher targets now increase taker latency and maker insufficient-margin again. This keeps the bottleneck diagnosis on core transaction sequencing plus dirty order snapshot copy/hash work under the current account state.
 ```
+## Follow-up Current-State Sweeps
+
+Additional runs after the final_poll change did not beat the `70.6 TPS`
+current-state result. These runs were intentionally varied to test whether the
+remaining ceiling was caused by low-index account pollution, maker traffic,
+account fanout, maker order size, or per-account in-flight limits.
+
+```text
+slice60 summary: docs/perf-stage-summary-final-poll-slice60-20260630-073954.md
+slice60 final_poll target=240: 1786 fills in 31s = 57.6 TPS
+
+taker-only summary: docs/perf-stage-summary-final-poll-taker-only-20260630-074055.md
+taker-only final_poll target=240: 1721 fills in 31s = 55.5 TPS
+
+fanout60 summary: docs/perf-stage-summary-final-poll-fanout60-20260630-074150.md
+fanout60 final_poll target=240: 1432 fills in 31s = 46.1 TPS
+
+maker-size-0.0025 summary: docs/perf-stage-summary-final-poll-makersize0025-20260630-074254.md
+maker-size-0.0025 final_poll target=240: 1566 fills in 31s = 50.5 TPS
+
+inflight2 summary: docs/perf-stage-summary-final-poll-inflight2-20260630-074346.md
+inflight2 final_poll target=240: 1597 fills in 31s = 51.5 TPS
+
+local sweep summary: docs/perf-stage-summary-final-poll-local-sweep-20260630-074440.md
+final_poll target=180: 1443 fills in 31s = 46.5 TPS
+final_poll target=220: 1638 fills in 31s = 52.8 TPS
+final_poll target=260: 1677 fills in 31s = 54.1 TPS
+```
+
+Interpretation:
+
+```text
+None of the follow-up variants moved the max above 70.6 TPS. Removing maker
+traffic lowers fill throughput, wider maker/taker fanout worsens latency, lower
+maker size removes some pressure but reduces liquidity, and per-account
+in-flight=2 does not help the clean path. The current degraded account state is
+not producing a stable clean max search; the strongest confirmed ceiling is
+still core transaction sequencing plus dirty order snapshot copy/hash work, with
+maker insufficient-margin churn as the immediate retest blocker.
+```
