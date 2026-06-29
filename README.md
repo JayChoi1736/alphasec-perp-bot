@@ -16,6 +16,7 @@ ported from `nitro-testnode/tests/helpers.js`.
 | `watch.py` | live orderbook depth/trade stream over WebSocket (ms timestamps) |
 | `load.py` | **throughput** load — N accounts spam IOC orders to hit a target tx/s |
 | `match.py` | **matched** load — maker/taker account pairs producing real fills, measures trade/s |
+| `accounts.py` | persistent sub-account keystore + pre-flight gas/deposit top-up |
 | `setup_dev.py` | local-dev helper: oracle price + fund the taker account |
 | `test_encode.py` | wire-format byte check (no deps) |
 
@@ -93,7 +94,14 @@ A fresh `--dev` node has no markets — register one first (e.g. via
 ### Per-account ceiling
 A single sender is capped at **~1 tx/block** (≈4 tx/s on a 250 ms dev node) —
 the node serializes a sender's txs to one per block. Submission scales linearly
-with sender accounts, so both load tools fan out across N ephemeral accounts.
+with sender accounts, so both load tools fan out across N accounts.
+
+### Sub-accounts (`accounts.py`)
+Sub-account keys are persisted in `accounts.json` (git-ignored — holds private
+keys) and reused across runs. Each launch the driver ensures the keystore has
+enough accounts (generating + saving any missing) and, before starting, checks
+each account's balance and **tops up gas + perp deposit to target** (the
+"rebalance first" step). Set `keystore` in config to use a different file.
 
 ### A) Throughput — `load.py`
 N accounts fire-and-forget IOC orders (cross the band, expire with no fill =

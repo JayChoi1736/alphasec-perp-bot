@@ -19,7 +19,8 @@ import time
 
 from web3 import Web3
 
-from dex import PerpDexClient, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config, to_wei_str
+from accounts import load_or_create, ensure_funded
+from dex import PerpDexClient, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
 
 
 def main():
@@ -28,7 +29,7 @@ def main():
     target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("load_tps", 20))
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("load_duration", 0)) or None
     per_acct = float(cfg.get("per_account_tps", 4))
-    seed = cfg.get("accounts_seed", "alphasec-load")
+    keystore = cfg.get("keystore", "accounts.json")
     n = max(1, math.ceil(target / per_acct))
     mid, slip = cfg["market_id"], float(cfg.get("taker_slippage", 0.01))
 
@@ -42,26 +43,12 @@ def main():
     size = float(cfg.get("order_size", 0.01))
     print(f"load: target={target} tx/s -> {n} accounts x {per_acct}/s, market={mid} mark={mark}")
 
-    # derive + gas-fund N ephemeral accounts (gas-only; IOC needs no margin)
-    accts, nonce = [], w3.eth.get_transaction_count(dev.address)
-    gp, cid = w3.eth.gas_price, w3.eth.chain_id
-    for i in range(n):
-        k = Web3.keccak(text=f"{seed}-{i}").hex()
-        a = PerpDexClient(cfg["rpc_url"], k, cfg["dex_address"])
-        if w3.eth.get_balance(a.address) < w3.to_wei(0.5, "ether"):
-            tx = {"to": a.address, "value": w3.to_wei(1, "ether"), "gas": 21000,
-                  "nonce": nonce, "chainId": cid, "gasPrice": gp}
-            w3.eth.send_raw_transaction(dev.acct.sign_transaction(tx).raw_transaction)
-            nonce += 1
-        accts.append(a)
-    # wait for the last funding tx to confirm, then prime local nonces
-    w3.eth.wait_for_transaction_receipt(
-        w3.eth.send_raw_transaction(dev.acct.sign_transaction(
-            {"to": dev.address, "value": 0, "gas": 21000, "nonce": nonce,
-             "chainId": cid, "gasPrice": gp}).raw_transaction))
+    # persistent keystore (generate missing) + top up gas before start (IOC needs no margin)
+    keys = load_or_create(keystore, "load", n)
+    accts = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in keys]
+    ensure_funded(dev, accts, gas_eth=1.0, deposit=0)
     for a in accts:
         a.prime()
-    print(f"funded {n} accounts")
 
     counts = [0] * n
     stop = threading.Event()

@@ -23,6 +23,7 @@ import time
 
 from web3 import Web3
 
+from accounts import load_or_create, ensure_funded
 from dex import (PerpDexClient, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
                  band_bounds, load_role_config, _to_int)
 
@@ -56,27 +57,16 @@ def main():
     print(f"match: target={target} trades/s -> {pairs} maker + {pairs} taker, market={mid} "
           f"mark={mark} cap=+/-{cap} mkbid/ask={mk_bid}/{mk_ask} tkbuy/sell={tk_buy}/{tk_sell}")
 
-    runid = str(int(time.time()))
-
-    def newacct(role, i):
-        return PerpDexClient(cfg["rpc_url"], Web3.keccak(text=f"match-{runid}-{role}-{i}").hex(), cfg["dex_address"])
-    makers = [newacct("m", i) for i in range(pairs)]
-    takers = [newacct("t", i) for i in range(pairs)]
+    # persistent keystore (generate missing) + top up gas/deposit to targets
+    keystore = cfg.get("keystore", "accounts.json")
+    makers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "maker", pairs)]
+    takers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "taker", pairs)]
     allacct = makers + takers
+    ensure_funded(dev, allacct, gas_eth=1.0, deposit=deposit)
 
-    # fund (sequential from dev): gas + spot token 2
-    gp, cid = w3.eth.gas_price, w3.eth.chain_id
-    for a in allacct:
-        if w3.eth.get_balance(a.address) < w3.to_wei(0.5, "ether"):
-            tx = {"to": a.address, "value": w3.to_wei(1, "ether"), "gas": 21000,
-                  "nonce": w3.eth.get_transaction_count(dev.address), "chainId": cid, "gasPrice": gp}
-            w3.eth.wait_for_transaction_receipt(
-                w3.eth.send_raw_transaction(dev.acct.sign_transaction(tx).raw_transaction))
-        dev.token_transfer(a.address, deposit)
-
-    def prep(a):
+    def prep(a):  # clear stale orders from prior runs, set leverage, prime nonce
         try:
-            a.deposit(deposit)
+            a.cancel_all(mid)
             a.set_leverage(mid, lev)
             a.prime()
         except Exception as e:
@@ -84,7 +74,7 @@ def main():
     ts = [threading.Thread(target=prep, args=(a,)) for a in allacct]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    print(f"funded+deposited {len(allacct)} accounts ({deposit} each)")
+    print(f"ready {len(allacct)} accounts ({deposit} deposit target each)")
 
     # shared state: cached positions (base units) + cumulative taker fills
     pos = [0.0] * len(allacct)
@@ -99,7 +89,11 @@ def main():
         return 0.0
 
     def poller():
-        prev = [0.0] * len(allacct)
+        # baseline from real starting positions so leftover inventory on persistent
+        # accounts isn't miscounted as fills
+        prev = [acct_pos(a) for a in allacct]
+        for idx in range(len(allacct)):
+            pos[idx] = prev[idx]
         while not stop.is_set():
             for idx, a in enumerate(allacct):
                 try:
