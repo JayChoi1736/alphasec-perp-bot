@@ -907,3 +907,32 @@ taker avg latency: 7037.4ms
 ```text
 This clean run proves the local load generator is scheduling more taker work than the core/RPC path accepts within the run window. The remaining ceiling is not a local scheduler underfeed; it is accepted-response latency/core processing under the sequencer/snapshot path.
 ```
+
+## 10:12 KST Fresh Taker Offset Probe
+
+Loadgen change:
+
+```text
+MATCH_MAKER_OFFSET and MATCH_TAKER_OFFSET were added to match.py.
+The account loader now ensures offset + count accounts exist, then slices the selected account window before worker partitioning.
+This lets the same keystore run controlled tests against fresh account ranges such as taker[300:600].
+```
+
+Evidence:
+
+```text
+before probe: taker[0], taker[1], taker[2] had eth_getTimeNonce len=100.
+before probe: taker[300], taker[301], taker[599] had eth_getTimeNonce len=0.
+summary: docs/perf-stage-summary-takers300-offset300-time-inflight2-20260630-100659.md
+condition: taker_offset=300, taker_count=300, account_inflight=2, nonce_mode=time
+result: 37.3 TPS, Taker Sent=1365, Taker Submit=723, errors=taker_error:nonce=42
+summary: docs/perf-stage-summary-takers300-offset300-time-inflight1-20260630-101007.md
+condition: taker_offset=300, taker_count=300, account_inflight=1, nonce_mode=time
+result: 33.5 TPS, Taker Sent=941, Taker Submit=641, errors={}
+```
+
+Updated bottleneck call:
+
+```text
+Fresh account selection is not the missing TPS lever. account_inflight=2 on fresh taker[300:600] creates slightly more accepted work but becomes dirty with nonce-too-low errors, and account_inflight=1 remains clean but lower. The best clean current-state ceiling remains about 37-38 TPS. Local signing remains about 3ms and local sent rate exceeds accepted rate, so the primary limiter is still core/RPC accepted-response latency, with pprof pointing at Sequencer.createBlock -> ExecutionEngine.sequenceTransactionsWithBlockMutex -> OrderBook.SnapshotDirtyTracking/book.copyBoolMap.
+```

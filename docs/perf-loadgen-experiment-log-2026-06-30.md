@@ -906,3 +906,59 @@ Interpretation:
 ```text
 The new Taker Sent column confirms the local scheduler is creating more taker work than the RPC/core path returns as accepted during the run. This run is clean, and it still lands at 36.5 TPS while the local generator attempted about 62 taker tx/s. The current limiter is accepted-response latency/core processing, not the local loop failing to schedule enough taker orders.
 ```
+
+## 10:06-10:12 KST Account Offset / Fresh Taker Nonce Probe
+
+Loadgen change:
+
+```text
+match.py now supports MATCH_MAKER_OFFSET and MATCH_TAKER_OFFSET.
+The loader ensures offset + count accounts exist, then selects the offset window before worker slicing.
+This allows tests against fresh account ranges, for example taker[300:600], without changing the keystore layout.
+```
+
+Verification:
+
+```text
+.venv/bin/python -m unittest test_match_helpers.MatchHelperTest.test_account_window_selects_offset_count test_match_helpers.MatchHelperTest.test_account_window_rejects_out_of_range -q
+.venv/bin/python -m unittest test_accounts.py test_match_helpers.py test_encode.py test_perf_stages.py -q
+.venv/bin/python -m py_compile match.py dex.py accounts.py perf_stages.py test_accounts.py test_match_helpers.py test_perf_stages.py
+git diff --check
+```
+
+Fresh nonce check before the probe:
+
+```text
+taker[0] time nonce len=100
+taker[1] time nonce len=100
+taker[2] time nonce len=100
+taker[300] time nonce len=0
+taker[301] time nonce len=0
+taker[599] time nonce len=0
+```
+
+Probe A, fresh taker slice with time nonce and account_inflight=2:
+
+```text
+summary: docs/perf-stage-summary-takers300-offset300-time-inflight2-20260630-100659.md
+condition: MATCH_TAKER_OFFSET=300, MATCH_TAKER_COUNT=300, MATCH_MAKER_COUNT=40, MATCH_ACCOUNT_INFLIGHT=2, MATCH_NONCE_MODE=time, maker once, healthy maker pool
+result: 37.3 TPS, fills=784, Taker Sent=1365, Taker Submit=723, Maker Submit=240
+latency: taker avg=7004.0ms, taker sign avg=3.0ms, wait avg=5037.9ms
+errors: taker_error:nonce=42, sample error contains "nonce too low"
+```
+
+Probe B, same fresh taker slice with account_inflight=1:
+
+```text
+summary: docs/perf-stage-summary-takers300-offset300-time-inflight1-20260630-101007.md
+condition: MATCH_TAKER_OFFSET=300, MATCH_TAKER_COUNT=300, MATCH_MAKER_COUNT=40, MATCH_ACCOUNT_INFLIGHT=1, MATCH_NONCE_MODE=time, maker once, healthy maker pool
+result: 33.5 TPS, fills=704, Taker Sent=941, Taker Submit=641, Maker Submit=240
+latency: taker avg=7126.9ms, taker sign avg=3.2ms, wait avg=6905.7ms
+errors: {}
+```
+
+Interpretation:
+
+```text
+The offset feature works: logs show taker_offset=300 and the run uses the selected 300-account window. Fresh accounts remove the concern that old taker[0:300] time-nonce windows alone caused account_inflight=2 failures. Even on taker[300:600], account_inflight=2 only reaches 37.3 TPS and becomes dirty with nonce-too-low errors. The clean account_inflight=1 run remains lower at 33.5 TPS. This does not move the clean max beyond the existing 37-38 TPS ceiling.
+```
