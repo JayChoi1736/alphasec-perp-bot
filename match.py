@@ -121,7 +121,8 @@ def main():
         # One order per tx slot (paced to ~per_acct tx/s), cycling cancel + the
         # ladder both sides. Periodic cancel_all clears the idle side that would
         # otherwise pile up and lock the maker's margin in stale resting orders.
-        nxt, j = time.time(), 0
+        # stagger phase across all accounts so they don't burst on the same tick
+        nxt, j = time.time() + (idx / (2 * pairs)) * tx_dt, 0
         while not stop.is_set():
             op, px = mk_ops[j % len(mk_ops)]
             try:
@@ -142,7 +143,8 @@ def main():
         # One IOC per tx slot. Hold a direction until hitting a cap, then reverse:
         # position sweeps +cap <-> -cap (triangle wave), monotonic within each leg
         # so the 1s |delta-position| poll counts every fill exactly, margin bounded.
-        gidx, nxt, d = pairs + idx, time.time(), BUY
+        gidx = pairs + idx
+        nxt, d = time.time() + (gidx / (2 * pairs)) * tx_dt, BUY
         while not stop.is_set():
             p = pos[gidx]
             if p >= cap:

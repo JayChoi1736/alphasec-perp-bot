@@ -55,7 +55,9 @@ def main():
     dt = n / target  # each account paces at target/n
 
     def worker(idx, a):
-        i, nxt = 0, time.time()
+        # stagger start phase across the period so accounts don't all fire on the
+        # same tick (avoids a thundering-herd burst every dt, smooths block load)
+        i, nxt = 0, time.time() + (idx / n) * dt
         while not stop.is_set():
             try:
                 if i % 2 == 0:
