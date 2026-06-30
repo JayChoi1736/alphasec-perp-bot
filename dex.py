@@ -15,10 +15,34 @@ Prices read back from the node (lvl2 levels, oracle markPrice/1e18) are HUMAN
 units, matching the order price scale.
 """
 import json
+import threading
 import time
 from decimal import Decimal
 
 DEX_ADDRESS = "0x00000000000000000000000000000000000000cc"
+
+
+class RateLimiter:
+    """Global pacer: hands out evenly-spaced submission slots so the AGGREGATE
+    rate across all worker threads is steady — no thundering-herd burst and no
+    async-backlog flush (the client never outruns the sequencer). Each worker
+    calls wait() right before a submission. rate_per_s <= 0 disables pacing."""
+
+    def __init__(self, rate_per_s):
+        self.dt = 1.0 / rate_per_s if rate_per_s > 0 else 0.0
+        self._lock = threading.Lock()
+        self._next = None
+
+    def wait(self):
+        if self.dt <= 0:
+            return
+        with self._lock:
+            now = time.time()
+            slot = self._next if (self._next and self._next > now) else now
+            self._next = slot + self.dt   # reserve the slot; catch up if we fell behind
+        delay = slot - time.time()
+        if delay > 0:
+            time.sleep(delay)             # sleep outside the lock so threads don't serialize
 REGISTRY_ADDR = "0x00000000000000000000000000000000000000cf"
 WEI = 10**18
 DEFAULT_BAND_BPS = 800  # ±8%, engine DefaultPriceBandBps

@@ -20,7 +20,7 @@ import time
 from web3 import Web3
 
 from accounts import load_or_create, ensure_funded
-from dex import PerpDexClient, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
+from dex import PerpDexClient, RateLimiter, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
 
 
 def main():
@@ -52,13 +52,12 @@ def main():
 
     counts = [0] * n
     stop = threading.Event()
-    dt = n / target  # each account paces at target/n
+    limiter = RateLimiter(target)  # one global pacer: steady aggregate target tx/s
 
     def worker(idx, a):
-        # stagger start phase across the period so accounts don't all fire on the
-        # same tick (avoids a thundering-herd burst every dt, smooths block load)
-        i, nxt = 0, time.time() + (idx / n) * dt
+        i = 0
         while not stop.is_set():
+            limiter.wait()  # evenly-spaced slot across all workers
             try:
                 if i % 2 == 0:
                     px = min(math.floor(hi / tick) * tick - tick, round(mark * (1 + slip) / tick) * tick)
@@ -70,10 +69,6 @@ def main():
             except Exception:
                 a.resync_nonce()
             i += 1
-            nxt += dt
-            sl = nxt - time.time()
-            if sl > 0:
-                time.sleep(sl)
 
     threads = [threading.Thread(target=worker, args=(i, a), daemon=True) for i, a in enumerate(accts)]
     t0 = time.time()

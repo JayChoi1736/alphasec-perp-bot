@@ -24,7 +24,7 @@ import time
 from web3 import Web3
 
 from accounts import load_or_create, ensure_funded
-from dex import (PerpDexClient, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
+from dex import (PerpDexClient, RateLimiter, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
                  band_bounds, load_role_config, _to_int)
 
 
@@ -89,7 +89,7 @@ def main():
     fills = [0.0]
     sent = [0] * len(allacct)       # per-account tx counters (no cross-thread race)
     stop = threading.Event()
-    tx_dt = 1.0 / per_acct          # seconds between txs per account -> each emits ~per_acct tx/s
+    limiter = RateLimiter(target)   # one global pacer: steady aggregate target tx/s
     # maker emits one order per tx slot, cycling a cancel + the ladder both sides
     mk_ops = [("cancel", None)] + [(SELL, px) for px in mk_asks] + [(BUY, px) for px in mk_bids]
 
@@ -118,12 +118,12 @@ def main():
             time.sleep(1)
 
     def maker_loop(idx, a):
-        # One order per tx slot (paced to ~per_acct tx/s), cycling cancel + the
-        # ladder both sides. Periodic cancel_all clears the idle side that would
-        # otherwise pile up and lock the maker's margin in stale resting orders.
-        # stagger phase across all accounts so they don't burst on the same tick
-        nxt, j = time.time() + (idx / (2 * pairs)) * tx_dt, 0
+        # One order per global slot, cycling cancel + the ladder both sides.
+        # Periodic cancel_all clears the idle side that would otherwise pile up
+        # and lock the maker's margin in stale resting orders.
+        j = 0
         while not stop.is_set():
+            limiter.wait()  # shared pacer -> steady aggregate tx/s, no burst/backlog
             op, px = mk_ops[j % len(mk_ops)]
             try:
                 if op == "cancel":
@@ -134,18 +134,15 @@ def main():
             except Exception:
                 a.resync_nonce()
             j += 1
-            nxt += tx_dt
-            sl = nxt - time.time()
-            if sl > 0:
-                time.sleep(sl)
 
     def taker_loop(idx, a):
-        # One IOC per tx slot. Hold a direction until hitting a cap, then reverse:
-        # position sweeps +cap <-> -cap (triangle wave), monotonic within each leg
-        # so the 1s |delta-position| poll counts every fill exactly, margin bounded.
+        # One IOC per global slot. Hold a direction until hitting a cap, then
+        # reverse: position sweeps +cap <-> -cap (triangle wave), monotonic within
+        # each leg so the 1s |delta-position| poll counts every fill exactly.
         gidx = pairs + idx
-        nxt, d = time.time() + (gidx / (2 * pairs)) * tx_dt, BUY
+        d = BUY
         while not stop.is_set():
+            limiter.wait()
             p = pos[gidx]
             if p >= cap:
                 d = SELL
@@ -157,10 +154,6 @@ def main():
                 sent[gidx] += 1
             except Exception:
                 a.resync_nonce()
-            nxt += tx_dt
-            sl = nxt - time.time()
-            if sl > 0:
-                time.sleep(sl)
 
     threads = [threading.Thread(target=poller, daemon=True)]
     threads += [threading.Thread(target=maker_loop, args=(i, a), daemon=True) for i, a in enumerate(makers)]
