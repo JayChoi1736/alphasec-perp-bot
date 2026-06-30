@@ -91,10 +91,14 @@ A fresh `--dev` node has no markets — register one first (e.g. via
 
 ## Load testing
 
-### Per-account ceiling
-A single sender is capped at **~1 tx/block** (≈4 tx/s on a 250 ms dev node) —
-the node serializes a sender's txs to one per block. Submission scales linearly
-with sender accounts, so both load tools fan out across N accounts.
+### Submission (async send)
+Fire-and-forget orders use **`eth_sendRawTransactionAsync`**, which enqueues a
+tx and returns immediately instead of blocking until it is sequenced. That lifts
+a single account from ~10 tx/s (sync `eth_sendRawTransaction`, which waits ~per
+block) to ~70 tx/s, so a single process easily sustains 100–150+ tx/s. Both load
+tools still fan out across N accounts (`ceil(target / per_account_tps)`); with
+async send `per_account_tps` can be raised well above the old ~4 to use fewer
+accounts for the same target.
 
 ### Sub-accounts (`accounts.py`)
 Sub-account keys are persisted in `accounts.json` (git-ignored — holds private

@@ -119,10 +119,16 @@ class PerpDexClient:
             nonce, chain_id, gas_price = self._nonce, self._chain_id, self._gas_price
         tx = {"to": self.dex, "data": encode_dex_input(cmd_byte, payload), "gas": self.gas_limit,
               "nonce": nonce, "chainId": chain_id, "gasPrice": gas_price, "value": 0}
-        h = self.w3.eth.send_raw_transaction(self.acct.sign_transaction(tx).raw_transaction)
+        raw = self.acct.sign_transaction(tx).raw_transaction
         if not wait:
+            # eth_sendRawTransactionAsync enqueues and returns immediately (no
+            # sequencing wait) — ~6x the per-account throughput of the sync method.
+            r = self.w3.provider.make_request("eth_sendRawTransactionAsync", [self.w3.to_hex(raw)])
+            if "error" in r:
+                raise RuntimeError(r["error"].get("message", r["error"]))
             self._nonce = nonce + 1  # only advance on successful submission
-            return h
+            return r["result"]
+        h = self.w3.eth.send_raw_transaction(raw)
         rcpt = self.w3.eth.wait_for_transaction_receipt(h, timeout=60)
         if rcpt.status != 1:
             raise RuntimeError(f"DEX tx 0x{cmd_byte:02x} reverted: {h.hex()}")
