@@ -684,3 +684,69 @@ errors and higher wait. The clean profile again keeps most CPU in core
 sequencing plus dirty snapshot copy/hash work, while local signing remains
 ~3ms and SubmitTransaction/RPC admission remains around 2-3% cum.
 ```
+
+## 09:03-09:09 KST Retest After Live f905097 Verification
+
+Pre-checks:
+
+```text
+devops live ArgoCD revision: f905097f3bdf0d18b18a86971d1fe9b004287f60
+ArgoCD status: Synced / Healthy
+perf core pod: perf-kaia-orderbook-dex-core-nitro-0
+core replicas: 1
+core image: asia-northeast3-docker.pkg.dev/orderbook-dex-dev/dev-docker-registry/kaia-orderbook-dex-core:dev@sha256:c20cfa320a46e6386e1823a610f90809a5796daf4be5f6cff7758688e5c127d8
+core resources: requests cpu=8 memory=32Gi, limits cpu=15 memory=60Gi
+live env: DD_ENV=perf, DD_SERVICE=kaia-orderbook-dex-core, no GOMAXPROCS, no GOGC
+loadgen push: blocked, probepark has no push permission to JayChoi1736/alphasec-perp-bot.git
+```
+
+Local verification:
+
+```text
+.venv/bin/python -m unittest test_accounts.py test_match_helpers.py test_encode.py test_perf_stages.py -q
+Ran 75 tests in 0.094s OK
+.venv/bin/python -m py_compile match.py dex.py accounts.py perf_stages.py test_accounts.py test_match_helpers.py test_perf_stages.py
+git diff --check
+```
+
+Retest results:
+
+```text
+workers=2 target=300 with pprof: 1174 fills in 31s = 37.9 TPS, errors={}, taker avg=953.1ms, taker sign avg=2.6ms, wait avg=984.4ms
+workers=2 target=300 no pprof: 1096 fills in 31s = 35.4 TPS, errors={}, taker avg=1028.0ms, taker sign avg=3.3ms, wait avg=1054.4ms
+workers=2 target=360 no pprof: 1121 fills in 31s = 36.1 TPS, maker_error:insufficient_margin=54, taker avg=1189.8ms, taker sign avg=3.6ms, wait avg=1217.0ms
+healthy maker filter target=300: 1043 fills in 31s = 33.6 TPS, errors={}, health_maker_skipped=112 per worker
+```
+
+Current profile:
+
+```text
+profile: /tmp/perf-stage-final_poll-20260630-090350.pprof.pb.gz
+Sequencer.createBlock: 19.58s / 77.06% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.55s / 76.94% cum
+OrderBook.SnapshotDirtyTracking: 17.90s / 70.44% cum
+book.copyBoolMap: 17.90s / 70.44% cum
+SendRawTransaction: 0.69s / 2.72% cum
+SubmitTransaction: 0.64s / 2.52% cum
+PublishTransaction: 0.63s / 2.48% cum
+```
+
+Maker account health sample:
+
+```text
+maker accounts: 150/150 queried
+order_margin: min=0.0 p50=362.862 p75=534.416 p90=722.298 max=770.650
+free: min=0.0 p50=1593.182 p75=1648.934 p90=1852.859 max=2104.034
+abs_pos: min=0.0 p50=0.029 p75=0.060 p90=0.142 max=0.372
+pass free>=1000 and abs_pos<=0.10: 71 accounts
+range 0:38 pass free>=100 abs_pos<=0.10: 18/38
+range 38:76 pass free>=100 abs_pos<=0.10: 30/38
+range 76:114 pass free>=100 abs_pos<=0.10: 23/38
+range 114:150 pass free>=100 abs_pos<=0.10: 0/36
+```
+
+Interpretation:
+
+```text
+Current clean ceiling after live f905097 verification is 35-38 TPS. target=360 is not a valid clean max because maker insufficient-margin errors return. Healthy maker filtering does not raise throughput, so the current dominant limiter is still core sequencing plus dirty order snapshot copy/hash work. Account state remains a secondary operational issue for higher target attempts, but it is not explaining the clean target=300 ceiling in this retest. Local signing remains around 2.6-3.6ms and RPC admission remains around 2.5% cum in the profile.
+```

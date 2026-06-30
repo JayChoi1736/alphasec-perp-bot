@@ -757,4 +757,60 @@ throughput or still leave maker insufficient-margin. Time nonce avoids nonce
 errors in a small probe, but pushes latency above 2s and cuts maker submit
 throughput. The limiting path remains core sequencing/snapshot work plus
 current perf account state, not local signing or DNS.
+
+## 09:09 KST Current Retest Update
+
+Live deployment state before the retest:
+
+```text
+ArgoCD revision: f905097f3bdf0d18b18a86971d1fe9b004287f60
+ArgoCD status: Synced / Healthy
+core replicas: 1
+core image: dev tag digest c20cfa320a46e6386e1823a610f90809a5796daf4be5f6cff7758688e5c127d8
+core resources: requests cpu=8 memory=32Gi, limits cpu=15 memory=60Gi
+live env: no GOMAXPROCS, no GOGC
+```
+
+Latest retest:
+
+```text
+summary: docs/perf-stage-summary-workers2-retest-20260630-090350.md
+workers=2 target=300 with pprof: 37.9 TPS, errors={}
+profile: /tmp/perf-stage-final_poll-20260630-090350.pprof.pb.gz
+
+summary: docs/perf-stage-summary-workers2-clean-retest-20260630-090913.md
+workers=2 target=300 no pprof: 35.4 TPS, errors={}
+
+summary: docs/perf-stage-summary-workers2-t360-retest-20260630-090818.md
+workers=2 target=360 no pprof: 36.1 TPS, maker_error:insufficient_margin=54
+
+summary: docs/perf-stage-summary-workers2-healthy-retest-20260630-090717.md
+healthy maker filter target=300: 33.6 TPS, errors={}
+```
+
+Current profile evidence:
+
+```text
+Sequencer.createBlock: 19.58s / 77.06% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 19.55s / 76.94% cum
+OrderBook.SnapshotDirtyTracking: 17.90s / 70.44% cum
+book.copyBoolMap: 17.90s / 70.44% cum
+SendRawTransaction: 0.69s / 2.72% cum
+SubmitTransaction: 0.64s / 2.52% cum
+PublishTransaction: 0.63s / 2.48% cum
+```
+
+Current maker-account state:
+
+```text
+maker accounts queried: 150/150
+free margin p50=1593.182, p90=1852.859, max=2104.034
+abs position p50=0.029, p90=0.142, max=0.372
+free>=1000 and abs_pos<=0.10: 71 accounts
+```
+
+Current bottleneck call:
+
+```text
+Historical best after removing the perf-only GOMAXPROCS cap remains 146.7 TPS, but the current live retest ceiling is 35-38 clean TPS. The current pprof is again dominated by core sequencing and dirty order snapshot copy/hash. target=360 is dirty because maker insufficient-margin errors return. Healthy maker filtering does not improve TPS, so account state is a secondary limiter for high-target runs, not the current clean target=300 ceiling. Loadgen-side signing, DNS, and RPC admission are not primary: signing is ~3ms and SubmitTransaction/PublishTransaction stay around 2.5% cumulative CPU.
 ```
