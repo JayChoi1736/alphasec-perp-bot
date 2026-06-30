@@ -217,6 +217,7 @@ class MatchHelperTest(unittest.TestCase):
                 "maker_submit_ok": 6,
                 "taker_sent": 5,
                 "cancel_ok": 2,
+                "maker_size_backoff": 0,
                 "maker_cooldown": 0,
                 "maker_cooldown_skipped": 0,
                 "prep_skipped": 0,
@@ -329,10 +330,17 @@ class MatchHelperTest(unittest.TestCase):
         )
 
     def test_summary_counts_exposes_maker_cooldown_totals(self):
-        stats = Counter({"maker_cooldown": 2, "maker_cooldown_skipped": 3})
+        stats = Counter(
+            {
+                "maker_cooldown": 2,
+                "maker_cooldown_skipped": 3,
+                "maker_size_backoff": 4,
+            }
+        )
 
         self.assertEqual(summary_counts(stats)["maker_cooldown"], 2)
         self.assertEqual(summary_counts(stats)["maker_cooldown_skipped"], 3)
+        self.assertEqual(summary_counts(stats)["maker_size_backoff"], 4)
 
     def test_taker_loop_call_uses_declared_positional_arity(self):
         tree = ast.parse(Path("match.py").read_text())

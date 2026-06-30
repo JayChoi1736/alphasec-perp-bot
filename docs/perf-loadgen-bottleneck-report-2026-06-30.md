@@ -736,3 +736,25 @@ margin appears. Increasing target mostly increases wait and error pressure.
 The clean profile still points to core sequencing and order snapshot copy/hash
 work as the primary bottleneck; local signing and RPC admission are secondary.
 ```
+
+## Rejected Loadgen Mitigations After Clean Ceiling
+
+Additional workers=2 probes after the 42.0 TPS clean ceiling:
+
+```text
+maker backoff target=360: 39.3 TPS, maker_error:insufficient_margin=42, maker_size_backoff=10 on worker 1
+relaxed healthy maker pool target=360: 39.0 TPS, maker_error:insufficient_margin=30
+account fanout target=300 with MATCH_PER_ACCOUNT_TPS=6: 38.5 TPS, maker_error:insufficient_margin=55
+time nonce + account_inflight=2 target=300: 34.8 TPS, errors={}, taker avg=2091.2ms
+```
+
+Updated bottleneck call:
+
+```text
+The load generator can now make these failure modes visible, but none moves the
+clean ceiling above workers=2 target=300. Margin-pressure mitigations reduce
+throughput or still leave maker insufficient-margin. Time nonce avoids nonce
+errors in a small probe, but pushes latency above 2s and cuts maker submit
+throughput. The limiting path remains core sequencing/snapshot work plus
+current perf account state, not local signing or DNS.
+```

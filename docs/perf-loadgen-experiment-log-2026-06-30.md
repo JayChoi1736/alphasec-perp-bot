@@ -533,6 +533,54 @@ plus dirty snapshot copy/hash work, not local signing or RPC admission as the
 primary bottleneck.
 ```
 
+## Workers=2 Rejected Follow-Up Experiments
+
+Loadgen diagnostic change:
+
+```text
+match.py: include maker_size_backoff in DONE summary.
+perf_stages.py: aggregate maker_size_backoff from worker results.
+test_match_helpers.py: cover maker_size_backoff summary counter.
+```
+
+Experiments:
+
+```text
+summary: docs/perf-stage-summary-workers2-maker-backoff-20260630-084909.md
+condition: workers=2 final_poll with MATCH_MAKER_SIZE_BACKOFF=0.5 and MATCH_MAKER_MIN_SIZE=0.001
+target=300: 40.5 TPS, errors={}
+target=360: 41.4 TPS, maker_error:insufficient_margin=60
+target=420: 40.0 TPS, maker_error:insufficient_margin=41
+
+summary: docs/perf-stage-summary-workers2-maker-backoff-counters-20260630-085341.md
+condition: same as above, target=360 after exposing maker_size_backoff
+result: 39.3 TPS, maker_error:insufficient_margin=42, maker_size_backoff=10 on worker 1
+
+summary: docs/perf-stage-summary-workers2-healthy-pool-relaxed-20260630-085500.md
+condition: MATCH_MAKER_POOL_COUNT=150, MATCH_HEALTHY_MAKER_MIN_FREE=100, MATCH_HEALTHY_MAKER_MAX_ABS_POS=0.10
+result: 39.0 TPS, maker_error:insufficient_margin=30, health_maker_skipped=105 per worker
+
+summary: docs/perf-stage-summary-workers2-account-fanout-20260630-085608.md
+condition: MATCH_PER_ACCOUNT_TPS=6 at target=300, so maker/taker count rises to 50 each
+result: 38.5 TPS, maker_error:insufficient_margin=55
+
+summary: docs/perf-stage-summary-workers2-time-inflight-probe-20260630-085746.md
+condition: MATCH_ACCOUNT_INFLIGHT=2 and MATCH_NONCE_MODE=time
+target=300: 34.8 TPS, errors={}, taker avg=2091.2ms, wait avg=1586.6ms
+target=360: 35.1 TPS, maker_error:insufficient_margin=23
+```
+
+Interpretation:
+
+```text
+None of the follow-up loadgen changes beats the workers=2 target=300 clean
+ceiling. Maker backoff does trigger, but it does not remove margin errors and
+reduces throughput. Relaxed healthy maker selection and wider account fanout
+also reduce TPS. Time nonce with account_inflight=2 avoids nonce errors in the
+target=300 probe, but it halves maker submit throughput and raises RPC latency
+to roughly 2s, so it is not a viable max-TPS path.
+```
+
 ## Stage Runner Multi-Worker Experiment
 
 Loadgen changes:

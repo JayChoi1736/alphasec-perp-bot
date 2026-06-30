@@ -241,6 +241,7 @@ def summary_counts(stats):
         "maker_submit_ok",
         "taker_sent",
         "cancel_ok",
+        "maker_size_backoff",
         "maker_cooldown",
         "maker_cooldown_skipped",
         "prep_skipped",
@@ -1141,6 +1142,7 @@ async def amain():
             f"submit_ok={counts['submit_ok']} taker_submit_ok={counts['taker_submit_ok']} "
             f"maker_submit_ok={counts['maker_submit_ok']} taker_sent={counts['taker_sent']} "
             f"cancel_ok={counts['cancel_ok']} maker_refresh_skipped={stats.get('maker_refresh_skipped', 0)} "
+            f"maker_size_backoff={counts['maker_size_backoff']} "
             f"maker_cooldown={counts['maker_cooldown']} "
             f"maker_cooldown_skipped={counts['maker_cooldown_skipped']} "
             f"prep_skipped={counts['prep_skipped']} "

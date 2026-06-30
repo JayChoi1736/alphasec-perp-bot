@@ -291,6 +291,7 @@ AGGREGATE_COUNTERS = (
     "taker_sent",
     "cancel_ok",
     "maker_refresh_skipped",
+    "maker_size_backoff",
     "maker_cooldown",
     "maker_cooldown_skipped",
     "prep_skipped",
