@@ -51,6 +51,7 @@ DEFAULT_BAND_BPS = 800  # ±8%, engine DefaultPriceBandBps
 CMD_TOKEN_TRANSFER = 0x11
 CMD_PERP_DEPOSIT = 0x12
 CMD_PERP_ORDER = 0x41
+CMD_PERP_CANCEL = 0x42
 CMD_PERP_CANCEL_ALL = 0x43
 CMD_PERP_SET_LEVERAGE = 0x45
 CMD_PERP_SET_MARGIN_TYPE = 0x46
@@ -188,6 +189,11 @@ class PerpDexClient:
             "l1owner": self.address, "marketId": int(market_id), "side": int(side),
             "price": dec_str(price), "quantity": dec_str(quantity),
             "isReduceOnly": bool(reduce_only), "timeInForce": int(tif)}, wait=wait)
+
+    def cancel(self, market_id, order_id, wait=True):
+        # order_id is the tx hash of the order to cancel (PerpCancelContext)
+        return self._send(CMD_PERP_CANCEL, {
+            "l1owner": self.address, "marketId": int(market_id), "orderId": order_id}, wait=wait)
 
     def cancel_all(self, market_id=0, wait=True):
         return self._send(CMD_PERP_CANCEL_ALL, {

@@ -60,6 +60,11 @@ def main():
     mk_bids = [q(mark * (1 - spread - k * mstep)) for k in range(mlevels)]
     tk_buy = min(math.floor(hi / tick) * tick - tick, q(mark * (1 + slip)))
     tk_sell = max(math.ceil(lo / tick) * tick + tick, q(mark * (1 - slip)))
+    tk_mid = q(mark)  # between bid and ask -> a non-crossing IOC (tx load, no fill)
+    # takers cross (fill) only every Nth order; maker cancels one tracked order
+    # every Nth op (individual PERP_CANCEL) for realistic place/cancel churn.
+    cross_every = max(1, int(cfg.get("taker_cross_every", 1)))
+    maker_cancel_every = max(1, int(cfg.get("maker_cancel_every", 6)))
     print(f"match: target={target} tx/s -> {pairs} maker + {pairs} taker "
           f"(~{2 * pairs * per_acct:.0f} tx/s), market={mid} mark={mark} cap=+/-{cap} "
           f"levels={mlevels} bids={mk_bids[0]}..{mk_bids[-1]} asks={mk_asks[0]}..{mk_asks[-1]} "
@@ -90,8 +95,7 @@ def main():
     sent = [0] * len(allacct)       # per-account tx counters (no cross-thread race)
     stop = threading.Event()
     limiter = RateLimiter(target)   # one global pacer: steady aggregate target tx/s
-    # maker emits one order per tx slot, cycling a cancel + the ladder both sides
-    mk_ops = [("cancel", None)] + [(SELL, px) for px in mk_asks] + [(BUY, px) for px in mk_bids]
+    mk_ladder = [(SELL, px) for px in mk_asks] + [(BUY, px) for px in mk_bids]
 
     def acct_pos(a):
         for p in a.positions():
@@ -118,42 +122,51 @@ def main():
             time.sleep(1)
 
     def maker_loop(idx, a):
-        # One order per global slot, cycling cancel + the ladder both sides.
-        # Periodic cancel_all clears the idle side that would otherwise pile up
-        # and lock the maker's margin in stale resting orders.
+        # Post the ladder and cancel individual tracked orders (PERP_CANCEL by
+        # tx-hash) for realistic place/cancel churn; an occasional cancel_all is a
+        # safety net so the idle side can't pile up and lock the maker's margin.
+        from collections import deque
+        hq = deque(maxlen=400)  # recent order ids (tx hashes) to cancel
         j = 0
         while not stop.is_set():
             limiter.wait()  # shared pacer -> steady aggregate tx/s, no burst/backlog
-            op, px = mk_ops[j % len(mk_ops)]
             try:
-                if op == "cancel":
+                if j % 60 == 0:
                     a.cancel_all(mid, wait=False)
+                    hq.clear()
+                elif j % maker_cancel_every == 0 and hq:
+                    a.cancel(mid, hq.popleft(), wait=False)  # individual cancel of oldest
                 else:
-                    a.order(mid, op, px, size, tif=POST, wait=False)
+                    side, px = mk_ladder[j % len(mk_ladder)]
+                    h = a.order(mid, side, px, size, tif=POST, wait=False)
+                    hq.append(h)
                 sent[idx] += 1
             except Exception:
                 a.resync_nonce()
             j += 1
 
     def taker_loop(idx, a):
-        # One IOC per global slot. Hold a direction until hitting a cap, then
-        # reverse: position sweeps +cap <-> -cap (triangle wave), monotonic within
-        # each leg so the 1s |delta-position| poll counts every fill exactly.
+        # Cross (fill) only every `cross_every` order so the trade rate is tunable;
+        # the rest are non-crossing IOCs at mid (tx load, no fill). Crossing orders
+        # sweep the position +cap <-> -cap (triangle wave) for exact fill counting.
         gidx = pairs + idx
-        d = BUY
+        d, j = BUY, 0
         while not stop.is_set():
             limiter.wait()
-            p = pos[gidx]
-            if p >= cap:
-                d = SELL
-            elif p <= -cap:
-                d = BUY
-            px = tk_buy if d == BUY else tk_sell
             try:
-                a.order(mid, d, px, size, tif=IOC, wait=False)
+                if j % cross_every == 0:           # crossing -> fill
+                    p = pos[gidx]
+                    if p >= cap:
+                        d = SELL
+                    elif p <= -cap:
+                        d = BUY
+                    a.order(mid, d, tk_buy if d == BUY else tk_sell, size, tif=IOC, wait=False)
+                else:                              # non-crossing -> pure tx load
+                    a.order(mid, BUY, tk_mid, size, tif=IOC, wait=False)
                 sent[gidx] += 1
             except Exception:
                 a.resync_nonce()
+            j += 1
 
     threads = [threading.Thread(target=poller, daemon=True)]
     threads += [threading.Thread(target=maker_loop, args=(i, a), daemon=True) for i, a in enumerate(makers)]

@@ -143,6 +143,14 @@ Relevant config: `match_deposit`, `inventory_cap`, `per_account_tps`, `spread`
 makers post a ladder of `match_levels` price points per side (default 1) for a
 richer, deeper-looking book instead of a single bid/ask price.
 
+Activity-mix knobs (tx/s stays at the limiter target regardless):
+- `taker_cross_every` (default 1) — takers cross (fill) only every Nth order; the
+  rest are non-crossing IOCs (pure tx load). Trade rate ≈ (target/2) / N, so e.g.
+  N=50 at 200 tx/s gives ~1–2 trades/s.
+- `maker_cancel_every` (default 6) — makers issue an individual `PERP_CANCEL`
+  (by order tx-hash) every Nth op for realistic place/cancel churn; a cancel_all
+  safety net still runs every 60 ops to bound resting-order margin.
+
 ## Wire encoding (per command, verified against a live node)
 | field | encoding |
 |-------|----------|
