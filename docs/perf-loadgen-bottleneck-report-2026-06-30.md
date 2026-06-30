@@ -853,3 +853,33 @@ Updated bottleneck call:
 ```text
 The local generator can now use 600 prepared taker accounts, so the earlier 38-account local ceiling is ruled out. maker_mode=once rules out maker refresh/cancel churn as the direct TPS ceiling. account_inflight=2 and time nonce can create more local pressure but make the run dirty and do not raise clean filled TPS. Increasing RPC timeout removes timeout symptoms but not the throughput ceiling. Current clean maximum remains about 37-38 TPS, with the remaining bottleneck on core/RPC response latency under sequencer and dirty snapshot work.
 ```
+
+## 09:47 KST High-Fanout Profile Confirmation
+
+Clean high-fanout profile:
+
+```text
+summary: docs/perf-stage-summary-takers600-healthy-once-pprof-20260630-094305.md
+profile: /tmp/perf-stage-final_poll-20260630-094305.pprof.pb.gz
+600 takers, healthy maker pool, maker once, normal nonce, account_inflight=1
+result: 37.1 TPS, errors={}
+taker avg=9724.5ms, wait avg=9027.2ms
+```
+
+Profile:
+
+```text
+Sequencer.createBlock: 12.95s / 76.54% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 12.93s / 76.42% cum
+OrderBook.SnapshotDirtyTracking: 12.13s / 71.69% cum
+book.copyBoolMap: 12.13s / 71.69% cum
+SendRawTransaction: 0.27s / 1.60% cum
+SubmitTransaction: 0.27s / 1.60% cum
+PublishTransaction: 0.26s / 1.54% cum
+```
+
+Final current diagnosis:
+
+```text
+Current perf-state clean TPS is 37.1-37.9. The 600-taker clean profile confirms the same core-side bottleneck after ruling out local taker count, maker refresh churn, DNS caching, and RPC timeout as primary causes. The next TPS increase requires reducing core sequencer/snapshot cost or resetting/reducing accumulated dirty order state; loadgen-only changes have not produced a higher clean ceiling.
+```

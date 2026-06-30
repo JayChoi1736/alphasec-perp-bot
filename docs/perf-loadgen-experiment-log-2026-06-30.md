@@ -809,3 +809,38 @@ Maker refresh/cancel churn is not the current loadgen-side ceiling: maker_mode=o
 
 Current clean max remains 37-38 TPS in this perf state. The load generator now has enough prepared taker accounts (600) to rule out the earlier 38-account local ceiling, and the remaining limit is core/RPC response latency under sequencer/snapshot work.
 ```
+
+## 09:43-09:47 KST High-Fanout Clean Profile
+
+Command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 30 --stages final_poll --workers 1 --log-dir /tmp --summary docs/perf-stage-summary-takers600-healthy-once-pprof-20260630-094305.md --stage-timeout 480 --pprof-url https://l2-pprof-perf.dexor.trade/debug/pprof/profile --pprof-seconds 20 --pprof-stages final_poll --env MATCH_INVENTORY_CAP=1.0 --env MATCH_TAKER_COUNT=600 --env MATCH_MAKER_COUNT=40 --env MATCH_PER_ACCOUNT_TPS=1 --env MATCH_ACCOUNT_INFLIGHT=1 --env MATCH_NONCE_MODE=normal --env MATCH_MAKER_MODE=once --env MATCH_MAKER_SIZE=0.02 --env MATCH_MAKER_MIN_SIZE=0.02 --env MATCH_GAS_ETH=0.00005 --env MATCH_RPC_TIMEOUT=30 --env MATCH_MAKER_POOL_COUNT=150 --env MATCH_HEALTHY_MAKER_MIN_FREE=1000 --env MATCH_HEALTHY_MAKER_MAX_ABS_POS=0.10
+```
+
+Result:
+
+```text
+summary: docs/perf-stage-summary-takers600-healthy-once-pprof-20260630-094305.md
+profile: /tmp/perf-stage-final_poll-20260630-094305.pprof.pb.gz
+result: 1151 fills in 31s = 37.1 TPS, errors={}
+taker avg=9724.5ms, taker sign avg=3.1ms, wait avg=9027.2ms
+```
+
+Profile:
+
+```text
+Sequencer.createBlock: 12.95s / 76.54% cum
+ExecutionEngine.sequenceTransactionsWithBlockMutex: 12.93s / 76.42% cum
+OrderBook.SnapshotDirtyTracking: 12.13s / 71.69% cum
+book.copyBoolMap: 12.13s / 71.69% cum
+SendRawTransaction: 0.27s / 1.60% cum
+SubmitTransaction: 0.27s / 1.60% cum
+PublishTransaction: 0.26s / 1.54% cum
+```
+
+Interpretation:
+
+```text
+The high-fanout clean profile confirms the same bottleneck after ruling out local taker count and maker refresh churn. 600 prepared takers keep enough local work pending, but filled TPS remains 37.1 and core CPU is still dominated by sequencer block creation plus dirty order snapshot copy/hash. SubmitTransaction/PublishTransaction cumulative CPU falls to about 1.5-1.6%, so the remote NEG RPC admission path is not the current primary bottleneck.
+```
