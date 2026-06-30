@@ -889,3 +889,21 @@ Current perf-state clean TPS is 37.1-37.9. The 600-taker clean profile confirms 
 ```text
 perf_stages.py summaries now include Taker Sent next to Taker Submit. This keeps future max-TPS reports from conflating local send attempts with successful eth_sendRawTransaction responses. It directly supports the current diagnosis: high-fanout runs can create local taker work, but accepted response throughput and filled TPS stay around 37-38 TPS while core pprof remains sequencer/snapshot dominated.
 ```
+
+## 09:58 KST Sent-vs-Accepted Check
+
+```text
+summary: docs/perf-stage-summary-takers600-healthy-once-sentcol-20260630-095359.md
+condition: 600 takers, healthy maker pool, maker once, normal nonce, account_inflight=1
+result: 36.5 TPS, errors={}
+Taker Sent: 1305
+Taker Submit: 705
+accepted/sent: 54.0%
+taker sent rate: 62.1/s
+taker accepted response rate: 33.6/s
+taker avg latency: 7037.4ms
+```
+
+```text
+This clean run proves the local load generator is scheduling more taker work than the core/RPC path accepts within the run window. The remaining ceiling is not a local scheduler underfeed; it is accepted-response latency/core processing under the sequencer/snapshot path.
+```

@@ -872,3 +872,37 @@ direct write_summary probe:
 | Stage | Target | Workers | TPS | Fills | Taker Sent | Taker Submit | Maker Submit | ...
 | probe | 300.0 | 1 | 37.1 | 1151 | 1689 | 1089 | 240 | ...
 ```
+
+## 09:53-09:58 KST Sent-vs-Accepted Perf Run
+
+Command:
+
+```text
+.venv/bin/python perf_stages.py --config config.perf.json --target 300 --duration 20 --stages final_poll --workers 1 --log-dir /tmp --summary docs/perf-stage-summary-takers600-healthy-once-sentcol-20260630-095359.md --stage-timeout 420 --env MATCH_INVENTORY_CAP=1.0 --env MATCH_TAKER_COUNT=600 --env MATCH_MAKER_COUNT=40 --env MATCH_PER_ACCOUNT_TPS=1 --env MATCH_ACCOUNT_INFLIGHT=1 --env MATCH_NONCE_MODE=normal --env MATCH_MAKER_MODE=once --env MATCH_MAKER_SIZE=0.02 --env MATCH_MAKER_MIN_SIZE=0.02 --env MATCH_GAS_ETH=0.00005 --env MATCH_RPC_TIMEOUT=30 --env MATCH_MAKER_POOL_COUNT=150 --env MATCH_HEALTHY_MAKER_MIN_FREE=1000 --env MATCH_HEALTHY_MAKER_MAX_ABS_POS=0.10
+```
+
+Result:
+
+```text
+summary: docs/perf-stage-summary-takers600-healthy-once-sentcol-20260630-095359.md
+result: 769 fills in 21s = 36.5 TPS, errors={}
+Taker Sent: 1305
+Taker Submit: 705
+Maker Submit: 240
+taker avg=7037.4ms, taker sign avg=3.0ms, wait avg=6356.3ms
+```
+
+Derived rates:
+
+```text
+taker sent rate: 62.1/s
+taker accepted response rate: 33.6/s
+fill rate: 36.6/s
+taker accepted / sent: 54.0%
+```
+
+Interpretation:
+
+```text
+The new Taker Sent column confirms the local scheduler is creating more taker work than the RPC/core path returns as accepted during the run. This run is clean, and it still lands at 36.5 TPS while the local generator attempted about 62 taker tx/s. The current limiter is accepted-response latency/core processing, not the local loop failing to schedule enough taker orders.
+```
