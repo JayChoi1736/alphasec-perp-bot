@@ -883,3 +883,9 @@ Final current diagnosis:
 ```text
 Current perf-state clean TPS is 37.1-37.9. The 600-taker clean profile confirms the same core-side bottleneck after ruling out local taker count, maker refresh churn, DNS caching, and RPC timeout as primary causes. The next TPS increase requires reducing core sequencer/snapshot cost or resetting/reducing accumulated dirty order state; loadgen-only changes have not produced a higher clean ceiling.
 ```
+
+## 09:51 KST Reporting Update
+
+```text
+perf_stages.py summaries now include Taker Sent next to Taker Submit. This keeps future max-TPS reports from conflating local send attempts with successful eth_sendRawTransaction responses. It directly supports the current diagnosis: high-fanout runs can create local taker work, but accepted response throughput and filled TPS stay around 37-38 TPS while core pprof remains sequencer/snapshot dominated.
+```

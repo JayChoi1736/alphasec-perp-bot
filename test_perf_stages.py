@@ -262,6 +262,30 @@ class PerfStagesTest(unittest.TestCase):
         self.assertIn("| final_poll | 360.0 | 2 | 42.6 |", text)
         self.assertIn("maker_error:insufficient_margin=53", text)
 
+    def test_write_summary_includes_taker_sent(self):
+        with TemporaryDirectory() as tmp:
+            path = f"{tmp}/summary.md"
+            write_summary(
+                [
+                    {
+                        "stage": "final_poll",
+                        "target": 300.0,
+                        "trades_s": 37.1,
+                        "fills": 1151,
+                        "taker_sent": 1689,
+                        "taker_submit_ok": 1089,
+                        "maker_submit_ok": 240,
+                        "latency_avg_ms": {"taker": 9724.5},
+                        "log": "/tmp/load.log",
+                    }
+                ],
+                path,
+            )
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("Taker Sent", text)
+            self.assertIn("| final_poll | 300.0 | 1 | 37.1 | 1151 | 1689 | 1089 | 240 |", text)
+
     def test_prepare_stage_config_writes_fresh_keystore_config(self):
         with TemporaryDirectory() as tmp:
             base_config = f"{tmp}/config.perf.json"

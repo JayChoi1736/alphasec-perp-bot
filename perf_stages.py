@@ -681,18 +681,19 @@ def write_summary(results, path):
     lines = [
         "# Perf Stage Summary",
         "",
-        "| Stage | Target | Workers | TPS | Fills | Taker Submit | Maker Submit | Taker ms | Taker sign ms | Wait ms | Errors | Log | Profile |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
+        "| Stage | Target | Workers | TPS | Fills | Taker Sent | Taker Submit | Maker Submit | Taker ms | Taker sign ms | Wait ms | Errors | Log | Profile |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for result in results:
         lat = result.get("latency_avg_ms", {})
         lines.append(
-            "| {stage} | {target} | {workers} | {tps} | {fills} | {taker} | {maker} | {taker_ms} | {sign_ms} | {wait_ms} | {errors} | {log} | {profile} |".format(
+            "| {stage} | {target} | {workers} | {tps} | {fills} | {taker_sent} | {taker} | {maker} | {taker_ms} | {sign_ms} | {wait_ms} | {errors} | {log} | {profile} |".format(
                 stage=result.get("stage", ""),
                 target=result.get("target", ""),
                 workers=result.get("worker_count", 1),
                 tps=result.get("trades_s", ""),
                 fills=result.get("fills", ""),
+                taker_sent=result.get("taker_sent", ""),
                 taker=result.get("taker_submit_ok", ""),
                 maker=result.get("maker_submit_ok", ""),
                 taker_ms=lat.get("taker", ""),

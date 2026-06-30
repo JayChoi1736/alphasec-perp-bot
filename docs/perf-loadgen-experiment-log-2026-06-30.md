@@ -844,3 +844,31 @@ Interpretation:
 ```text
 The high-fanout clean profile confirms the same bottleneck after ruling out local taker count and maker refresh churn. 600 prepared takers keep enough local work pending, but filled TPS remains 37.1 and core CPU is still dominated by sequencer block creation plus dirty order snapshot copy/hash. SubmitTransaction/PublishTransaction cumulative CPU falls to about 1.5-1.6%, so the remote NEG RPC admission path is not the current primary bottleneck.
 ```
+
+## 09:51 KST Summary Sent-vs-Accepted Instrumentation
+
+Loadgen reporting change:
+
+```text
+perf_stages.py write_summary now includes a Taker Sent column before Taker Submit.
+test_perf_stages.py adds test_write_summary_includes_taker_sent.
+```
+
+Reason:
+
+```text
+During high-fanout tests, periodic taker/s and summary Taker Submit represent successful eth_sendRawTransaction responses, not all locally signed/scheduled taker sends. The DONE line already contains taker_sent, but stage summaries hid it. Showing Taker Sent next to Taker Submit makes it clear whether the local generator is failing to create work or whether core/RPC accepted responses are the limiter.
+```
+
+Verification:
+
+```text
+.venv/bin/python -m unittest test_perf_stages.PerfStagesTest.test_write_summary_includes_taker_sent -q
+.venv/bin/python -m unittest test_accounts.py test_match_helpers.py test_encode.py test_perf_stages.py -q
+.venv/bin/python -m py_compile match.py dex.py accounts.py perf_stages.py test_accounts.py test_match_helpers.py test_perf_stages.py
+git diff --check
+
+direct write_summary probe:
+| Stage | Target | Workers | TPS | Fills | Taker Sent | Taker Submit | Maker Submit | ...
+| probe | 300.0 | 1 | 37.1 | 1151 | 1689 | 1089 | 240 | ...
+```
