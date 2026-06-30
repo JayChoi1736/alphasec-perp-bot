@@ -814,3 +814,42 @@ Current bottleneck call:
 ```text
 Historical best after removing the perf-only GOMAXPROCS cap remains 146.7 TPS, but the current live retest ceiling is 35-38 clean TPS. The current pprof is again dominated by core sequencing and dirty order snapshot copy/hash. target=360 is dirty because maker insufficient-margin errors return. Healthy maker filtering does not improve TPS, so account state is a secondary limiter for high-target runs, not the current clean target=300 ceiling. Loadgen-side signing, DNS, and RPC admission are not primary: signing is ~3ms and SubmitTransaction/PublishTransaction stay around 2.5% cumulative CPU.
 ```
+
+## 09:41 KST Loadgen-Side Exclusions
+
+Additional loadgen probes after preparing 600 taker accounts:
+
+```text
+maker once with 38 takers:
+37.6 TPS, errors={}
+
+wide_accounts with 300 takers and continuous polling:
+37.2 TPS, dirty with poll/taker TimeoutError and nonce errors
+
+300 takers, final_poll, maker refresh:
+36.1 TPS, dirty with maker insufficient-margin=3
+
+300 takers, maker once:
+38.5 TPS, dirty with maker_seed insufficient-margin=2
+
+300 takers, maker once, time nonce, account_inflight=2:
+39.1 TPS, dirty with taker TimeoutError=433 and nonce=31
+
+300 takers, maker once, time nonce, account_inflight=2, MATCH_RPC_TIMEOUT=30:
+33.3 TPS, taker TimeoutError removed, still not a higher max
+
+600 takers, maker once:
+35.4 TPS, dirty with maker_seed insufficient-margin=2
+
+300 takers, maker once, normal nonce, account_inflight=2:
+37.5 TPS, dirty with taker nonce=349
+
+600 takers, healthy maker pool, maker once, normal nonce, account_inflight=1:
+37.1 TPS, errors={}, taker avg=9593.3ms, wait avg=8895.1ms
+```
+
+Updated bottleneck call:
+
+```text
+The local generator can now use 600 prepared taker accounts, so the earlier 38-account local ceiling is ruled out. maker_mode=once rules out maker refresh/cancel churn as the direct TPS ceiling. account_inflight=2 and time nonce can create more local pressure but make the run dirty and do not raise clean filled TPS. Increasing RPC timeout removes timeout symptoms but not the throughput ceiling. Current clean maximum remains about 37-38 TPS, with the remaining bottleneck on core/RPC response latency under sequencer and dirty snapshot work.
+```

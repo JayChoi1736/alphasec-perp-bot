@@ -750,3 +750,62 @@ Interpretation:
 ```text
 Current clean ceiling after live f905097 verification is 35-38 TPS. target=360 is not a valid clean max because maker insufficient-margin errors return. Healthy maker filtering does not raise throughput, so the current dominant limiter is still core sequencing plus dirty order snapshot copy/hash work. Account state remains a secondary operational issue for higher target attempts, but it is not explaining the clean target=300 ceiling in this retest. Local signing remains around 2.6-3.6ms and RPC admission remains around 2.5% cum in the profile.
 ```
+
+## 09:15-09:41 KST Loadgen Fanout and Maker-Once Probes
+
+Hypothesis:
+
+```text
+The current 35-38 TPS ceiling could be caused by local loadgen shape rather than core:
+1. maker refresh/cancel churn may inflate dirty order snapshots;
+2. 38 taker accounts with account_inflight=1 and ~1s RPC latency create a ~38 TPS local ceiling;
+3. client RPC timeout could be too low once core latency rises.
+```
+
+Experiments:
+
+```text
+workers=2 maker once, maker_size=0.03, 38 takers:
+summary: docs/perf-stage-summary-workers2-maker-once-probe-20260630-091546.md
+result: 37.6 TPS, errors={}, taker avg=955.4ms, wait avg=990.1ms
+
+wide_accounts stage, 300 takers, continuous position polling:
+summary: docs/perf-stage-summary-wide-accounts-current-20260630-091701.md
+result: 37.2 TPS, dirty with poll TimeoutError=276, taker TimeoutError=69, nonce errors=10
+
+300 takers, final_poll, maker refresh:
+summary: docs/perf-stage-summary-wide-finalpoll-current-20260630-091919.md
+result: 36.1 TPS, dirty with maker_error:insufficient_margin=3, taker avg=7135.3ms
+
+300 takers, maker once, maker_size=0.03:
+summary: docs/perf-stage-summary-wide-once-current-20260630-092141.md
+result: 38.5 TPS, dirty with maker_seed_error:insufficient_margin=2, taker avg=6916.6ms
+
+300 takers, maker once, time nonce, account_inflight=2:
+summary: docs/perf-stage-summary-wide-once-time-inflight2-20260630-092443.md
+result: 39.1 TPS, dirty with taker TimeoutError=433 and nonce=31
+
+same as above with MATCH_RPC_TIMEOUT=30:
+summary: docs/perf-stage-summary-wide-once-time-inflight2-timeout30-20260630-092709.md
+result: 33.3 TPS, maker_seed_error:insufficient_margin=2, taker TimeoutError removed
+
+generated 300 additional taker accounts, total takers=600, gas top-up=0.00005 KAIA each:
+summary: docs/perf-stage-summary-takers600-once-probe-20260630-093018.md
+result: 35.4 TPS, maker_seed_error:insufficient_margin=2, taker avg=7269.0ms
+
+300 takers, maker once, normal nonce, account_inflight=2:
+summary: docs/perf-stage-summary-wide-once-normal-inflight2-20260630-093518.md
+result: 37.5 TPS, dirty with taker_error:nonce=349
+
+600 takers, healthy maker pool, maker once, normal nonce, account_inflight=1:
+summary: docs/perf-stage-summary-takers600-healthy-once-clean-20260630-093746.md
+result: 37.1 TPS, errors={}, taker avg=9593.3ms, wait avg=8895.1ms
+```
+
+Interpretation:
+
+```text
+Maker refresh/cancel churn is not the current loadgen-side ceiling: maker_mode=once keeps TPS at the same 37-39 range. Taker fanout is also not the current ceiling: increasing takers from 300 to 600 and selecting healthy makers still gives 37.1 clean TPS. account_inflight=2 creates more local pressure but turns dirty through nonce errors or timeouts and does not create a valid higher clean max. Raising MATCH_RPC_TIMEOUT from 10s to 30s removes taker TimeoutError in the time-nonce probe, but TPS drops to 33.3, so client timeout is a symptom of core/RPC latency rather than the primary ceiling.
+
+Current clean max remains 37-38 TPS in this perf state. The load generator now has enough prepared taker accounts (600) to rule out the earlier 38-account local ceiling, and the remaining limit is core/RPC response latency under sequencer/snapshot work.
+```
