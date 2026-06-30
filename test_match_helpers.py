@@ -8,6 +8,7 @@ from unittest.mock import patch
 from dex import BUY, SELL
 from match import (
     account_pair_count,
+    account_window,
     apply_local_fill,
     active_role_names,
     choose_direction,
@@ -49,6 +50,14 @@ class MatchHelperTest(unittest.TestCase):
         self.assertEqual(worker_bounds(10, 0, 3), (0, 4))
         self.assertEqual(worker_bounds(10, 1, 3), (4, 7))
         self.assertEqual(worker_bounds(10, 2, 3), (7, 10))
+
+    def test_account_window_selects_offset_count(self):
+        accounts = ["a0", "a1", "a2", "a3", "a4"]
+        self.assertEqual(account_window(accounts, 2, 2, "taker"), ["a2", "a3"])
+
+    def test_account_window_rejects_out_of_range(self):
+        with self.assertRaisesRegex(ValueError, "taker account window"):
+            account_window(["a0", "a1"], 1, 2, "taker")
 
     def test_account_pair_count_uses_target_over_per_account_rate_by_default(self):
         self.assertEqual(account_pair_count(300, 8), 38)

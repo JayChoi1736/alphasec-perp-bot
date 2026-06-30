@@ -89,6 +89,16 @@ def worker_bounds(total, worker_index, worker_count):
     return start, end
 
 
+def account_window(accounts, offset, count, role):
+    start = int(offset)
+    end = start + int(count)
+    if start < 0 or count < 0 or end > len(accounts):
+        raise ValueError(
+            f"{role} account window {start}:{end} out of range for {len(accounts)} accounts"
+        )
+    return accounts[start:end]
+
+
 def account_pair_count(target, per_account_tps, override=None):
     if override is not None:
         pairs = int(override)
@@ -761,6 +771,8 @@ async def amain():
         taker_override=os.environ.get("MATCH_TAKER_COUNT"),
     )
     maker_pool_count = env_int("MATCH_MAKER_POOL_COUNT", cfg.get("maker_pool_count", maker_count))
+    maker_offset = env_int("MATCH_MAKER_OFFSET", cfg.get("maker_offset", 0))
+    taker_offset = env_int("MATCH_TAKER_OFFSET", cfg.get("taker_offset", 0))
     healthy_maker_min_free = env_float(
         "MATCH_HEALTHY_MAKER_MIN_FREE",
         cfg.get("healthy_maker_min_free", 0.0),
@@ -828,9 +840,11 @@ async def amain():
     taker_sell = max(math.ceil(low / tick) * tick + tick, quantize(mark * (1 - slip)))
 
     keystore = cfg.get("keystore", "accounts.json")
-    all_makers = load_or_create(keystore, "maker", maker_pool_count)
-    all_takers = load_or_create(keystore, "taker", taker_count)
-    worker_takers = all_takers[taker_start:taker_end]
+    all_makers = load_or_create(keystore, "maker", maker_offset + maker_pool_count)
+    all_takers = load_or_create(keystore, "taker", taker_offset + taker_count)
+    maker_window = account_window(all_makers, maker_offset, maker_pool_count, "maker")
+    taker_window = account_window(all_takers, taker_offset, taker_count, "taker")
+    worker_takers = taker_window[taker_start:taker_end]
     health_filter_enabled = (
         maker_pool_count > maker_count
         or healthy_maker_min_free > 0
@@ -846,7 +860,7 @@ async def amain():
                 session=web3_session,
                 request_kwargs=web3_request_kwargs,
             )
-            for item in all_makers
+            for item in maker_window
         ]
         maker_health = await gather_limited(
             maker_candidates,
@@ -871,7 +885,7 @@ async def amain():
             f"max_abs_pos={healthy_maker_max_abs_pos})"
         )
     else:
-        worker_makers = all_makers[maker_start:maker_end]
+        worker_makers = maker_window[maker_start:maker_end]
         makers = [
             PerpDexClient(
                 cfg["rpc_url"],
@@ -900,6 +914,7 @@ async def amain():
     print(
         f"match_async: target={target} trades/s makers={maker_count} takers={taker_count} worker={worker_index}/{worker_count} "
         f"maker_range={maker_start}:{maker_end} taker_range={taker_start}:{taker_end} "
+        f"maker_offset={maker_offset} taker_offset={taker_offset} "
         f"local_makers={local_maker_count} local_takers={local_taker_count} per_account_tps={per_acct} market={market_id} "
         f"mark={mark} levels={levels} maker_size={maker_size} maker_min_size={maker_min_size} "
         f"maker_size_backoff={maker_size_backoff} taker_size={taker_size} "
