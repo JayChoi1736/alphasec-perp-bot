@@ -123,16 +123,21 @@ rebalancing so it runs indefinitely:
 - takers hold a direction until they hit `±inventory_cap`, then reverse — so each
   position sweeps a triangle wave inside the band and **margin never grows**.
 ```bash
-.venv/bin/python match.py config.dev.json <target_trades_s> [duration_s]   # duration 0 = until Ctrl-C
+.venv/bin/python match.py config.dev.json <target_tx_s> [duration_s]   # duration 0 = until Ctrl-C
 ```
-Fresh accounts per run (gas + token 2 + deposit). A background poller snapshots
-positions each second so the order loops never block on RPC; fills are counted
-as cumulative |position change| on the taker side. Measured: 20 trades/s target →
-~13 trades/s with taker inventory oscillating within ±0.5 (no margin drift).
-Relevant config: `match_tps`, `match_deposit`, `inventory_cap`, `spread` (maker
-offset, must be < `taker_slippage`), and `match_levels` / `level_step` — makers
-post a ladder of `match_levels` price points per side (default 1) for a richer,
-deeper-looking book instead of a single bid/ask price.
+The target is **total tx/s** (submission rate, not fills). It fans out to
+`ceil(target / per_account_tps / 2)` maker + taker accounts, each paced to emit
+`per_account_tps` tx/s; the progress line reports both measured `tx_rate` and the
+resulting `trade_rate` (fills). Accuracy depends on `per_account_tps` matching the
+env's real per-account send ceiling (≈4 on a local dev node, ≈2.7 on a remote
+RPC) — set it lower to add accounts and hit a higher target.
+
+A background poller snapshots positions each second so the order loops never
+block on RPC; fills are counted as cumulative |position change| on the taker side.
+Relevant config: `match_deposit`, `inventory_cap`, `per_account_tps`, `spread`
+(maker offset, must be < `taker_slippage`), and `match_levels` / `level_step` —
+makers post a ladder of `match_levels` price points per side (default 1) for a
+richer, deeper-looking book instead of a single bid/ask price.
 
 ## Wire encoding (per command, verified against a live node)
 | field | encoding |

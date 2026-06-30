@@ -12,7 +12,7 @@ A background poller snapshots positions every second so the hot order loops
 never block on RPC. Fills are counted as cumulative |position change| on the
 taker side (net position oscillates, so a net read would undercount).
 
-  python match.py [config.json] [target_trades_s] [duration_s]
+  python match.py [config.json] [target_tx_s] [duration_s]   # target is total tx/s
 
 duration 0 = run until Ctrl-C.
 """
@@ -31,9 +31,9 @@ from dex import (PerpDexClient, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
     cfg = load_role_config(path, "maker")
-    target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("match_tps", 20))
+    target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("match_tps", 20))  # target tx/s
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("match_duration", 0))
-    per_acct = float(cfg.get("per_account_tps", 4))
+    per_acct = float(cfg.get("per_account_tps", 4))  # node ceiling: ~1 tx/block per sender
     lev = int(cfg["leverage"])
     deposit = float(cfg.get("match_deposit", 100000))
     size = float(cfg.get("order_size", 0.01))
@@ -41,7 +41,9 @@ def main():
     spread = float(cfg.get("spread", 0.0005))         # maker offset (< taker_slippage)
     slip = float(cfg.get("taker_slippage", 0.01))
     mid = cfg["market_id"]
-    pairs = max(1, math.ceil(target / per_acct))
+    # target is TOTAL tx/s. Each account submits at ~per_acct tx/s (node cap), so
+    # split the rate across `pairs` makers + `pairs` takers -> 2*pairs accounts.
+    pairs = max(1, math.ceil(target / per_acct / 2))
 
     dev = PerpDexClient(cfg["rpc_url"], cfg["private_key"], cfg["dex_address"])
     w3 = dev.w3
@@ -58,16 +60,17 @@ def main():
     mk_bids = [q(mark * (1 - spread - k * mstep)) for k in range(mlevels)]
     tk_buy = min(math.floor(hi / tick) * tick - tick, q(mark * (1 + slip)))
     tk_sell = max(math.ceil(lo / tick) * tick + tick, q(mark * (1 - slip)))
-    print(f"match: target={target} trades/s -> {pairs} maker + {pairs} taker, market={mid} "
-          f"mark={mark} cap=+/-{cap} levels={mlevels} bids={mk_bids[0]}..{mk_bids[-1]} "
-          f"asks={mk_asks[0]}..{mk_asks[-1]} tkbuy/sell={tk_buy}/{tk_sell}")
+    print(f"match: target={target} tx/s -> {pairs} maker + {pairs} taker "
+          f"(~{2 * pairs * per_acct:.0f} tx/s), market={mid} mark={mark} cap=+/-{cap} "
+          f"levels={mlevels} bids={mk_bids[0]}..{mk_bids[-1]} asks={mk_asks[0]}..{mk_asks[-1]} "
+          f"tkbuy/sell={tk_buy}/{tk_sell}")
 
     # persistent keystore (generate missing) + top up gas/deposit to targets
     keystore = cfg.get("keystore", "accounts.json")
     makers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "maker", pairs)]
     takers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "taker", pairs)]
     allacct = makers + takers
-    ensure_funded(dev, allacct, gas_eth=1.0, deposit=deposit)
+    ensure_funded(dev, allacct, gas_eth=float(cfg.get("fund_gas_eth", 1.0)), deposit=deposit)
 
     def prep(a):  # clear stale orders from prior runs, set leverage, prime nonce
         try:
@@ -84,8 +87,11 @@ def main():
     # shared state: cached positions (base units) + cumulative taker fills
     pos = [0.0] * len(allacct)
     fills = [0.0]
+    sent = [0] * len(allacct)       # per-account tx counters (no cross-thread race)
     stop = threading.Event()
-    dt = pairs / target
+    tx_dt = 1.0 / per_acct          # seconds between txs per account -> each emits ~per_acct tx/s
+    # maker emits one order per tx slot, cycling a cancel + the ladder both sides
+    mk_ops = [("cancel", None)] + [(SELL, px) for px in mk_asks] + [(BUY, px) for px in mk_bids]
 
     def acct_pos(a):
         for p in a.positions():
@@ -112,31 +118,30 @@ def main():
             time.sleep(1)
 
     def maker_loop(idx, a):
-        # Quote both sides (closed system: maker pos = -taker pos, so takers
-        # reversing at ±cap bounds maker inventory too). Periodically cancel_all:
-        # whichever side the takers aren't currently hitting piles up unbought and
-        # would otherwise lock all the maker's margin in stale resting orders.
-        nxt, k = time.time(), 0
+        # One order per tx slot (paced to ~per_acct tx/s), cycling cancel + the
+        # ladder both sides. Periodic cancel_all clears the idle side that would
+        # otherwise pile up and lock the maker's margin in stale resting orders.
+        nxt, j = time.time(), 0
         while not stop.is_set():
+            op, px = mk_ops[j % len(mk_ops)]
             try:
-                if k % 10 == 0:                        # clear stale resting orders
+                if op == "cancel":
                     a.cancel_all(mid, wait=False)
-                for px in mk_asks:                     # ladder both sides
-                    a.order(mid, SELL, px, size, tif=POST, wait=False)
-                for px in mk_bids:
-                    a.order(mid, BUY, px, size, tif=POST, wait=False)
+                else:
+                    a.order(mid, op, px, size, tif=POST, wait=False)
+                sent[idx] += 1
             except Exception:
                 a.resync_nonce()
-            k += 1
-            nxt += dt
+            j += 1
+            nxt += tx_dt
             sl = nxt - time.time()
             if sl > 0:
                 time.sleep(sl)
 
     def taker_loop(idx, a):
-        # hold a direction until hitting a cap, then reverse: position sweeps
-        # +cap <-> -cap (triangle wave). Monotonic within each leg, so the 1s
-        # |delta-position| poll counts every fill exactly, and margin stays bounded.
+        # One IOC per tx slot. Hold a direction until hitting a cap, then reverse:
+        # position sweeps +cap <-> -cap (triangle wave), monotonic within each leg
+        # so the 1s |delta-position| poll counts every fill exactly, margin bounded.
         gidx, nxt, d = pairs + idx, time.time(), BUY
         while not stop.is_set():
             p = pos[gidx]
@@ -147,9 +152,10 @@ def main():
             px = tk_buy if d == BUY else tk_sell
             try:
                 a.order(mid, d, px, size, tif=IOC, wait=False)
+                sent[gidx] += 1
             except Exception:
                 a.resync_nonce()
-            nxt += dt
+            nxt += tx_dt
             sl = nxt - time.time()
             if sl > 0:
                 time.sleep(sl)
@@ -164,14 +170,16 @@ def main():
             time.sleep(5)
             el = time.time() - t0
             inv = [pos[pairs + i] for i in range(pairs)]
-            print(f"t={el:.0f}s trades={fills[0] / size:.0f} rate={fills[0] / size / el:.1f}/s "
+            print(f"t={el:.0f}s tx={sum(sent)} tx_rate={sum(sent) / el:.1f}/s "
+                  f"trades={fills[0] / size:.0f} trade_rate={fills[0] / size / el:.1f}/s "
                   f"taker_inv=[{min(inv):+.2f},{max(inv):+.2f}] (cap +/-{cap})")
     except KeyboardInterrupt:
         pass
     stop.set()
     time.sleep(1.5)
     el = time.time() - t0
-    print(f"DONE: {fills[0] / size:.0f} fills in {el:.0f}s = {fills[0] / size / el:.1f} trades/s; "
+    print(f"DONE: {sum(sent)} tx in {el:.0f}s = {sum(sent) / el:.1f} tx/s; "
+          f"{fills[0] / size:.0f} fills = {fills[0] / size / el:.1f} trades/s; "
           f"final taker_inv range [{min(pos[pairs:]):+.2f},{max(pos[pairs:]):+.2f}]")
 
 

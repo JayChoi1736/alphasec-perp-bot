@@ -46,7 +46,7 @@ def main():
     # persistent keystore (generate missing) + top up gas before start (IOC needs no margin)
     keys = load_or_create(keystore, "load", n)
     accts = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in keys]
-    ensure_funded(dev, accts, gas_eth=1.0, deposit=0)
+    ensure_funded(dev, accts, gas_eth=float(cfg.get("fund_gas_eth", 1.0)), deposit=0)
     for a in accts:
         a.prime()
 
