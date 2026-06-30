@@ -15,6 +15,7 @@ Prices read back from the node (lvl2 levels, oracle markPrice/1e18) are HUMAN
 units, matching the order price scale.
 """
 import json
+import time
 from decimal import Decimal
 
 DEX_ADDRESS = "0x00000000000000000000000000000000000000cc"
@@ -116,7 +117,13 @@ class PerpDexClient:
             nonce, chain_id, gas_price = (self.w3.eth.get_transaction_count(self.address),
                                           self.w3.eth.chain_id, self.w3.eth.gas_price)
         else:
-            nonce, chain_id, gas_price = self._nonce, self._chain_id, self._gas_price
+            # The tx nonce is a millisecond time-nonce: the node requires it within
+            # ±24h of block time. Pin it to current epoch-ms (incrementing when we
+            # burst faster than 1/ms) so it never drifts "too far from block time"
+            # — a sequential counter from a stale account nonce gets rejected.
+            chain_id, gas_price = self._chain_id, self._gas_price
+            nonce = max(int(time.time() * 1000), (self._nonce or 0) + 1)
+            self._nonce = nonce
         tx = {"to": self.dex, "data": encode_dex_input(cmd_byte, payload), "gas": self.gas_limit,
               "nonce": nonce, "chainId": chain_id, "gasPrice": gas_price, "value": 0}
         raw = self.acct.sign_transaction(tx).raw_transaction
@@ -126,7 +133,6 @@ class PerpDexClient:
             r = self.w3.provider.make_request("eth_sendRawTransactionAsync", [self.w3.to_hex(raw)])
             if "error" in r:
                 raise RuntimeError(r["error"].get("message", r["error"]))
-            self._nonce = nonce + 1  # only advance on successful submission
             return r["result"]
         h = self.w3.eth.send_raw_transaction(raw)
         rcpt = self.w3.eth.wait_for_transaction_receipt(h, timeout=60)
