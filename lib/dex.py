@@ -223,7 +223,8 @@ class PerpDexClient:
         addr = addr or self.address
         sel = self.w3.keccak(text="isOracleSubmitter(address)")[:4]
         arg = bytes.fromhex(addr[2:].rjust(64, "0"))
-        out = self.w3.eth.call({"to": ARB_OWNER_PUBLIC, "data": "0x" + (sel + arg).hex()})
+        out = self.w3.eth.call({"to": self.w3.to_checksum_address(ARB_OWNER_PUBLIC),
+                                "data": "0x" + (sel + arg).hex()})
         return int.from_bytes(out, "big") == 1
 
     def add_oracle_submitter(self, addr):

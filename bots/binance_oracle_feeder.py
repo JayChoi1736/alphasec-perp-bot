@@ -73,7 +73,14 @@ def main():
 
     print(f"binance feeder {c.address} push={push_interval}s refresh={market_refresh}s quote={quote}")
     if not c.is_oracle_submitter():
-        print(f"WARNING: {c.address} is NOT a registered OracleSubmitter — txs will revert.")
+        if cfg.get("auto_register"):  # dev: the key is ChainOwner, so it can self-grant
+            try:
+                c.add_oracle_submitter(c.address)
+                print(f"registered {c.address} as OracleSubmitter (auto_register)")
+            except Exception as e:
+                print(f"WARNING: auto_register failed ({e}) — key is not ChainOwner? txs will revert.")
+        else:
+            print(f"WARNING: {c.address} is NOT a registered OracleSubmitter — txs will revert.")
 
     market_map, last_refresh = {}, None
     while True:
