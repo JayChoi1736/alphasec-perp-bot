@@ -8,27 +8,17 @@ Two things keep the book rich and stable:
   - requote only when mid drifts past half a level step, so a quiet market
     leaves the full ladder resting instead of cancel/repost flicker every tick.
 
-  python maker.py [config.json]   (reads the 'maker' role block)
+  python -m bots.maker [configs/config.json]    (reads the 'maker' role block)
 """
-import math
 import sys
 import time
 
-from dex import PerpDexClient, BUY, SELL, POST, DEFAULT_BAND_BPS, band_bounds, load_role_config
-
-
-def q(x, step):
-    return round(round(x / step) * step, 12) if step else x
-
-
-def clamp_band(px, tick, lo, hi):
-    if lo:
-        px = min(max(px, math.ceil(lo / tick) * tick + tick), math.floor(hi / tick) * tick - tick)
-    return px
+from lib.dex import PerpDexClient, BUY, SELL, POST, DEFAULT_BAND_BPS, band_bounds, load_role_config
+from lib.strategy import q, clamp_band, maker_step
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "configs/config.json"
     cfg = load_role_config(path, "maker")
     c = PerpDexClient(cfg["rpc_url"], cfg["private_key"], cfg["dex_address"])
     mid = cfg["market_id"]
@@ -97,25 +87,14 @@ def main():
                     print(f"submitted={submitted} rate={submitted / el:.1f}/s "
                           f"confirmed_blk={c.w3.eth.block_number} mark={mark}")
 
-    last_mid = None
+    state = {}  # holds 'last_mid' across ticks (skip requote while quiet)
     while True:
         try:
-            mark = c.mark_price(mid)
-            bb, ba = c.best_bid_ask(mid)
-            mid_px = (bb + ba) / 2 if bb and ba else (bb or ba or mark or float(cfg["ref_price"]))
-            # skip churn while the market is quiet -> ladder stays resting & full
-            if last_mid is not None and abs(mid_px - last_mid) < mid_px * step * 0.5:
-                time.sleep(interval)
-                continue
-            lo, hi = band_bounds(mark, band_bps)
-            c.cancel_all(mid)
-            for k in range(levels):
-                off = spread + k * step
-                c.order(mid, BUY, clamp_band(q(mid_px * (1 - off), tick), tick, lo, hi), size, tif=POST)
-                c.order(mid, SELL, clamp_band(q(mid_px * (1 + off), tick), tick, lo, hi), size, tif=POST)
-            last_mid = mid_px
-            print(f"requote mark={mark} mid={mid_px:.2f} levels={levels} "
-                  f"bid0={q(mid_px * (1 - spread), tick)} ask0={q(mid_px * (1 + spread), tick)}")
+            r = maker_step(c, mid, size, spread, step, levels, tick, band_bps, float(cfg["ref_price"]), state)
+            if r:  # None = skipped requote (market quiet -> ladder stays resting)
+                mark, mid_px = r
+                print(f"requote mark={mark} mid={mid_px:.2f} levels={levels} "
+                      f"bid0={q(mid_px * (1 - spread), tick)} ask0={q(mid_px * (1 + spread), tick)}")
         except Exception as e:  # ponytail: log-and-continue; no reconnect framework
             print("tick error:", e)
         time.sleep(interval)

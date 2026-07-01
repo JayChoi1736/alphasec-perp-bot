@@ -55,6 +55,12 @@ CMD_PERP_CANCEL = 0x42
 CMD_PERP_CANCEL_ALL = 0x43
 CMD_PERP_SET_LEVERAGE = 0x45
 CMD_PERP_SET_MARGIN_TYPE = 0x46
+CMD_PERP_ORACLE_PRICE = 0x4C        # PerpOraclePriceUpdate (single market)
+CMD_PERP_ORACLE_PRICE_BATCH = 0x4D  # PerpOraclePriceBatchUpdate (<=64 markets)
+
+ARB_OWNER = "0x0000000000000000000000000000000000000070"        # addOracleSubmitter (ChainOwner)
+ARB_OWNER_PUBLIC = "0x000000000000000000000000000000000000006B"  # isOracleSubmitter (read)
+MAX_ORACLE_BATCH = 64  # MaxPerpOraclePriceBatchSize
 
 BUY, SELL = 0, 1
 GTC, IOC, POST, MARKET = 0, 1, 2, 3  # timeInForce (dex_perp.go)
@@ -111,12 +117,16 @@ def _to_int(v):
 
 
 class PerpDexClient:
-    def __init__(self, rpc_url, private_key, dex_address=DEX_ADDRESS, gas_limit=500000):
+    def __init__(self, rpc_url, private_key, dex_address=DEX_ADDRESS, gas_limit=500000, owner=None):
         from web3 import Web3
         from eth_account import Account
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
         self.acct = Account.from_key(private_key)
         self.address = self.acct.address
+        # When `owner` is set, this client signs txs with a SESSION wallet but acts
+        # on behalf of `owner` (l1owner) — orders carry sessionNonce=true (Path C).
+        self.is_session = owner is not None
+        self.l1owner = Web3.to_checksum_address(owner) if owner else self.address
         self.dex = Web3.to_checksum_address(dex_address)
         self.registry = Web3.to_checksum_address(REGISTRY_ADDR)
         self.gas_limit = gas_limit
@@ -183,21 +193,97 @@ class PerpDexClient:
         return self._send(CMD_PERP_SET_MARGIN_TYPE, {
             "l1owner": self.address, "marketId": int(market_id), "marginType": int(margin_type)})
 
+    def oracle_price(self, market_id, index_price, cex_price=None, wait=True):
+        """Submit one market's oracle price (cmd 0x4C). index/cex are HUMAN units;
+        oracle wire wants WEI (1e18) decimal strings, unlike order price. Sender must
+        be a registered OracleSubmitter and equal l1owner. Mark updates in block N+1."""
+        if cex_price is None:
+            cex_price = index_price
+        return self._send(CMD_PERP_ORACLE_PRICE, {
+            "l1owner": self.address, "marketId": int(market_id),
+            "indexPrice": to_wei_str(index_price), "cexPerpPrice": to_wei_str(cex_price)}, wait=wait)
+
+    def oracle_price_batch(self, entries, wait=True):
+        """Batch oracle update (cmd 0x4D). entries: [(market_id, index, cex?), ...],
+        1..64, no duplicate marketId (all-or-nothing validation)."""
+        if not (1 <= len(entries) <= MAX_ORACLE_BATCH):
+            raise ValueError(f"batch size must be 1..{MAX_ORACLE_BATCH}, got {len(entries)}")
+        out, seen = [], set()
+        for e in entries:
+            mid, idx = int(e[0]), e[1]
+            cex = e[2] if len(e) > 2 and e[2] is not None else idx
+            if mid in seen:
+                raise ValueError(f"duplicate marketId {mid} in batch")
+            seen.add(mid)
+            out.append({"marketId": mid, "indexPrice": to_wei_str(idx), "cexPerpPrice": to_wei_str(cex)})
+        return self._send(CMD_PERP_ORACLE_PRICE_BATCH, {"l1owner": self.address, "entries": out}, wait=wait)
+
+    def is_oracle_submitter(self, addr=None):
+        """Read ArbOwnerPublic.isOracleSubmitter(addr) — preflight before feeding."""
+        addr = addr or self.address
+        sel = self.w3.keccak(text="isOracleSubmitter(address)")[:4]
+        arg = bytes.fromhex(addr[2:].rjust(64, "0"))
+        out = self.w3.eth.call({"to": ARB_OWNER_PUBLIC, "data": "0x" + (sel + arg).hex()})
+        return int.from_bytes(out, "big") == 1
+
+    def add_oracle_submitter(self, addr):
+        """ArbOwner.addOracleSubmitter(addr) — ChainOwner-only, V3+. Call from a
+        chain-owner client to authorize a feeder. One-time setup, not per-tick."""
+        sel = self.w3.keccak(text="addOracleSubmitter(address)")[:4]
+        arg = bytes.fromhex(addr[2:].rjust(64, "0"))
+        tx = {"to": self.w3.to_checksum_address(ARB_OWNER), "data": "0x" + (sel + arg).hex(),
+              "gas": self.gas_limit, "nonce": self.w3.eth.get_transaction_count(self.address),
+              "chainId": self.w3.eth.chain_id, "gasPrice": self.w3.eth.gas_price, "value": 0}
+        rcpt = self.w3.eth.wait_for_transaction_receipt(
+            self.w3.eth.send_raw_transaction(self.acct.sign_transaction(tx).raw_transaction), timeout=60)
+        if rcpt.status != 1:
+            raise RuntimeError("addOracleSubmitter reverted (not ChainOwner, or V<3?)")
+        return rcpt
+
+    def _sess(self, payload):
+        if self.is_session:
+            payload["sessionNonce"] = True
+        return payload
+
     def order(self, market_id, side, price, quantity, tif=GTC, reduce_only=False, wait=True):
         # price/quantity are HUMAN decimals as strings (engine scales by 1e18)
-        return self._send(CMD_PERP_ORDER, {
-            "l1owner": self.address, "marketId": int(market_id), "side": int(side),
+        return self._send(CMD_PERP_ORDER, self._sess({
+            "l1owner": self.l1owner, "marketId": int(market_id), "side": int(side),
             "price": dec_str(price), "quantity": dec_str(quantity),
-            "isReduceOnly": bool(reduce_only), "timeInForce": int(tif)}, wait=wait)
+            "isReduceOnly": bool(reduce_only), "timeInForce": int(tif)}), wait=wait)
 
     def cancel(self, market_id, order_id, wait=True):
         # order_id is the tx hash of the order to cancel (PerpCancelContext)
-        return self._send(CMD_PERP_CANCEL, {
-            "l1owner": self.address, "marketId": int(market_id), "orderId": order_id}, wait=wait)
+        return self._send(CMD_PERP_CANCEL, self._sess({
+            "l1owner": self.l1owner, "marketId": int(market_id), "orderId": order_id}), wait=wait)
 
     def cancel_all(self, market_id=0, wait=True):
-        return self._send(CMD_PERP_CANCEL_ALL, {
-            "l1owner": self.address, "marketId": int(market_id)}, wait=wait)
+        return self._send(CMD_PERP_CANCEL_ALL, self._sess({
+            "l1owner": self.l1owner, "marketId": int(market_id)}), wait=wait)
+
+    def register_session(self, session_address, expiry_s, wait=True):
+        """Owner registers a session wallet (EIP-712 RegisterSessionWallet, signed
+        by this owner key). After this, a client constructed with the session key
+        and owner=this.address can place orders for this owner via sessionNonce."""
+        import base64
+        from eth_account.messages import encode_typed_data
+        chain_id = self.w3.eth.chain_id
+        ts = int(time.time() * 1000)
+        typed = {
+            "domain": {"name": "DEXSignTransaction", "version": "1", "chainId": chain_id,
+                       "verifyingContract": "0x0000000000000000000000000000000000000000"},
+            "types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "version", "type": "string"},
+                                       {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}],
+                      "RegisterSessionWallet": [{"name": "sessionWallet", "type": "address"},
+                                                {"name": "expiry", "type": "uint64"}, {"name": "nonce", "type": "uint64"}]},
+            "primaryType": "RegisterSessionWallet",
+            "message": {"sessionWallet": session_address, "expiry": str(int(expiry_s)), "nonce": str(ts)},
+        }
+        sig = self.acct.sign_message(encode_typed_data(full_message=typed)).signature
+        payload = {"type": 1, "publickey": session_address, "expiresAt": int(expiry_s),
+                   "nonce": ts, "l1owner": self.address,
+                   "l1signature": base64.b64encode(bytes(sig)).decode("ascii")}
+        return self._send(0x01, payload, wait=wait)
 
     # ---- read path (JSON-RPC) --------------------------------------------
     def _rpc(self, method, params):
@@ -239,6 +325,13 @@ class PerpDexClient:
                 mp = _to_int(o.get("markPrice"))
                 return mp / 1e18 if mp > 0 else None
         return None
+
+    def market_count(self):
+        """Number of registered perp markets (registry getMarketCount()). Market
+        ids are 1..count."""
+        sel = self.w3.keccak(text="getMarketCount()")[:4]
+        out = self.w3.eth.call({"to": self.registry, "data": "0x" + sel.hex()})
+        return int.from_bytes(out, "big")
 
     def market_info(self, market_id):
         """tick/lot/min_notional/price_band_bps/max_leverage/status, or None.

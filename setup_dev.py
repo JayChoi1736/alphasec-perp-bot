@@ -9,13 +9,13 @@ orders clear the price band. Idempotent enough to re-run.
 """
 import sys
 
-from dex import PerpDexClient, load_role_config, to_wei_str
+from lib.dex import PerpDexClient, load_role_config
 
 
 def main():
     # The maker key in the dev config is the node's dev account (funded + an
     # OracleSubmitter), so it doubles as the setup signer — no key hardcoded here.
-    path = sys.argv[1] if len(sys.argv) > 1 else "config.dev.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "configs/config.dev.json"
     common = load_role_config(path, "maker")
     taker = load_role_config(path, "taker")
     dev = PerpDexClient(common["rpc_url"], common["private_key"], common["dex_address"])
@@ -24,23 +24,12 @@ def main():
     w3 = dev.w3
 
     # 0) grant the dev key the OracleSubmitter role (chain owner can; idempotent)
-    arbowner = w3.eth.contract(
-        address=w3.to_checksum_address("0x0000000000000000000000000000000000000070"),
-        abi=[{"name": "addOracleSubmitter", "type": "function", "stateMutability": "nonpayable",
-              "inputs": [{"name": "s", "type": "address"}], "outputs": []},
-             {"name": "isOracleSubmitter", "type": "function", "stateMutability": "view",
-              "inputs": [{"name": "a", "type": "address"}], "outputs": [{"type": "bool"}]}])
-    if not arbowner.functions.isOracleSubmitter(dev.address).call():
-        tx = arbowner.functions.addOracleSubmitter(dev.address).build_transaction(
-            {"from": dev.address, "nonce": w3.eth.get_transaction_count(dev.address),
-             "gas": 300000, "gasPrice": w3.eth.gas_price, "chainId": w3.eth.chain_id})
-        w3.eth.wait_for_transaction_receipt(w3.eth.send_raw_transaction(dev.acct.sign_transaction(tx).raw_transaction))
+    if not dev.is_oracle_submitter():
+        dev.add_oracle_submitter(dev.address)
         print("granted OracleSubmitter to dev key")
 
     # 1) ensure oracle price
-    px = to_wei_str(common["ref_price"])
-    r = dev._send(0x4C, {"l1owner": dev.address, "marketId": int(mid),
-                         "indexPrice": px, "cexPerpPrice": px})
+    r = dev.oracle_price(mid, common["ref_price"])
     print(f"oracle market {mid} = {common['ref_price']} (status {r.status})")
 
     # 2) gas for the taker

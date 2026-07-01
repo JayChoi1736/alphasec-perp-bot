@@ -5,7 +5,7 @@ Subscribes to the node's `perpTrades` feed (ws://<host>:8548 on a dev node) and
 prints each depth-diff (`b`=bid levels, `a`=ask levels; qty 0 = level removed)
 and trade event as it arrives.
 
-  python watch.py [config.json]
+  python -m bots.watch [configs/config.json]
 
 Config: top-level `rpc_url` + `market_id`; optional `ws_url` (else derived as
 ws://<rpc-host>:8548). Set market_id to 0 to watch all markets.
@@ -29,7 +29,7 @@ def ws_url_from(cfg):
 
 
 def main():
-    cfg = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "config.json"))
+    cfg = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "configs/config.json"))
     url = ws_url_from(cfg)
     want = str(cfg.get("market_id", 0))
     try:

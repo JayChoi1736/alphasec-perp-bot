@@ -12,7 +12,7 @@ A background poller snapshots positions every second so the hot order loops
 never block on RPC. Fills are counted as cumulative |position change| on the
 taker side (net position oscillates, so a net read would undercount).
 
-  python match.py [config.json] [target_tx_s] [duration_s]   # target is total tx/s
+  python -m bots.match [configs/config.json] [target_tx_s] [duration_s]   # target is total tx/s
 
 duration 0 = run until Ctrl-C.
 """
@@ -23,13 +23,14 @@ import time
 
 from web3 import Web3
 
-from accounts import load_or_create, ensure_funded
-from dex import (PerpDexClient, RateLimiter, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
+from lib.accounts import load_or_create, ensure_funded
+from lib.dex import (PerpDexClient, RateLimiter, BUY, SELL, POST, IOC, DEFAULT_BAND_BPS,
                  band_bounds, load_role_config, _to_int)
+from lib.strategy import q as sq, taker_price, maker_prices
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "configs/config.json"
     cfg = load_role_config(path, "maker")
     target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("match_tps", 20))  # target tx/s
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("match_duration", 0))
@@ -52,15 +53,13 @@ def main():
     band_bps = (mi["price_band_bps"] if mi else 0) or DEFAULT_BAND_BPS
     mark = dev.mark_price(mid) or float(cfg["ref_price"])
     lo, hi = band_bounds(mark, band_bps)
-    q = lambda x: round(x / tick) * tick
     # maker ladder: match_levels price points per side (richer-looking book)
     mlevels = int(cfg.get("match_levels", 1))
     mstep = float(cfg.get("level_step", 0.001))
-    mk_asks = [q(mark * (1 + spread + k * mstep)) for k in range(mlevels)]
-    mk_bids = [q(mark * (1 - spread - k * mstep)) for k in range(mlevels)]
-    tk_buy = min(math.floor(hi / tick) * tick - tick, q(mark * (1 + slip)))
-    tk_sell = max(math.ceil(lo / tick) * tick + tick, q(mark * (1 - slip)))
-    tk_mid = q(mark)  # between bid and ask -> a non-crossing IOC (tx load, no fill)
+    mk_bids, mk_asks = maker_prices(mark, spread, mstep, mlevels, tick)
+    tk_buy = taker_price(BUY, mark, slip, tick, lo, hi)
+    tk_sell = taker_price(SELL, mark, slip, tick, lo, hi)
+    tk_mid = sq(mark, tick)  # between bid and ask -> a non-crossing IOC (tx load, no fill)
     # takers cross (fill) only every Nth order; maker cancels one tracked order
     # every Nth op (individual PERP_CANCEL) for realistic place/cancel churn.
     cross_every = max(1, int(cfg.get("taker_cross_every", 1)))
@@ -71,7 +70,7 @@ def main():
           f"tkbuy/sell={tk_buy}/{tk_sell}")
 
     # persistent keystore (generate missing) + top up gas/deposit to targets
-    keystore = cfg.get("keystore", "accounts.json")
+    keystore = cfg.get("keystore", "keystores/accounts.json")
     makers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "maker", pairs)]
     takers = [PerpDexClient(cfg["rpc_url"], k["key"], cfg["dex_address"]) for k in load_or_create(keystore, "taker", pairs)]
     allacct = makers + takers

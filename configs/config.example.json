@@ -19,5 +19,19 @@
     "deposit": 0,
     "order_size": 0.5,
     "taker_slippage": 0.01
+  },
+  "feeder": {
+    "private_key": "0xORACLE_SUBMITTER_PRIVATE_KEY",
+    "source": "constant",
+    "markets": [24],
+    "vol": 0.002,
+    "batch": false
+  },
+  "binance_feeder": {
+    "private_key": "0xORACLE_SUBMITTER_PRIVATE_KEY",
+    "push_interval": 3,
+    "market_refresh": 300,
+    "quote": "USDT",
+    "symbols": ["BTC", "ETH", "BNB", "SOL", "XRP"]
   }
 }

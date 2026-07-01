@@ -6,7 +6,7 @@ spread the target rate across N = ceil(tps / per_account_tps) ephemeral accounts
 each firing fire-and-forget IOC orders (cross the band, expire with no fill =
 pure submission load, no margin/state growth). Accounts need only gas.
 
-  python load.py [config.json] [target_tps] [duration_s]
+  python -m bots.load [configs/config.json] [target_tps] [duration_s]
 
 config: top-level rpc_url/dex_address/market_id/ref_price; optional
 `load_tps`, `per_account_tps` (default 4), `accounts_seed`. Funding signer is
@@ -19,17 +19,17 @@ import time
 
 from web3 import Web3
 
-from accounts import load_or_create, ensure_funded
-from dex import PerpDexClient, RateLimiter, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
+from lib.accounts import load_or_create, ensure_funded
+from lib.dex import PerpDexClient, RateLimiter, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "configs/config.json"
     cfg = load_role_config(path, "maker")  # maker key = funding signer
     target = float(sys.argv[2]) if len(sys.argv) > 2 else float(cfg.get("load_tps", 20))
     duration = float(sys.argv[3]) if len(sys.argv) > 3 else float(cfg.get("load_duration", 0)) or None
     per_acct = float(cfg.get("per_account_tps", 4))
-    keystore = cfg.get("keystore", "accounts.json")
+    keystore = cfg.get("keystore", "keystores/accounts.json")
     n = max(1, math.ceil(target / per_acct))
     mid, slip = cfg["market_id"], float(cfg.get("taker_slippage", 0.01))
 

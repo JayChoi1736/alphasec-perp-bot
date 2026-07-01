@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """Taker bot — crosses the spread IOC, alternating side, clamped inside the band.
 
-  python taker.py [config.json]
+  python -m bots.taker [configs/config.json]
 
 Side alternates by tick counter (not random) so runs are reproducible.
 Reads the 'taker' role block merged over the common config.
 """
-import math
 import sys
 import time
 
-from dex import PerpDexClient, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
-
-
-def q(x, step):
-    return round(round(x / step) * step, 12) if step else x
+from lib.dex import PerpDexClient, BUY, SELL, IOC, DEFAULT_BAND_BPS, band_bounds, load_role_config
+from lib.strategy import q, taker_price, taker_step
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "configs/config.json"
     cfg = load_role_config(path, "taker")
     c = PerpDexClient(cfg["rpc_url"], cfg["private_key"], cfg["dex_address"])
     mid = cfg["market_id"]
@@ -63,14 +59,8 @@ def main():
         i = 0
         while True:
             try:
-                if i % 2 == 0:
-                    px = q(mark * (1 + slip), tick)
-                    px = px if not hi else min(px, math.floor(hi / tick) * tick - tick)
-                    c.order(mid, BUY, px, size, tif=IOC, wait=False)
-                else:
-                    px = q(mark * (1 - slip), tick)
-                    px = px if not lo else max(px, math.ceil(lo / tick) * tick + tick)
-                    c.order(mid, SELL, px, size, tif=IOC, wait=False)
+                side = BUY if i % 2 == 0 else SELL
+                c.order(mid, side, taker_price(side, mark, slip, tick, lo, hi), size, tif=IOC, wait=False)
                 submitted += 1
             except Exception as e:
                 print("submit err:", e)
@@ -90,23 +80,8 @@ def main():
     i = 0
     while True:
         try:
-            mark = c.mark_price(mid)
-            bb, ba = c.best_bid_ask(mid)
-            lo, hi = band_bounds(mark, band_bps)
-            if i % 2 == 0:  # BUY: lift the ask, capped at band top
-                ref = ba or bb or mark or float(cfg["ref_price"])
-                px = q(ref * (1 + slip), tick)
-                if hi:
-                    px = min(px, math.floor(hi / tick) * tick - tick)
-                c.order(mid, BUY, px, size, tif=IOC)
-                print(f"#{i} BUY {size} @{px} (mark={mark})")
-            else:           # SELL: hit the bid, floored at band bottom
-                ref = bb or ba or mark or float(cfg["ref_price"])
-                px = q(ref * (1 - slip), tick)
-                if lo:
-                    px = max(px, math.ceil(lo / tick) * tick + tick)
-                c.order(mid, SELL, px, size, tif=IOC)
-                print(f"#{i} SELL {size} @{px} (mark={mark})")
+            side, px, mark = taker_step(c, mid, size, slip, tick, band_bps, i, float(cfg["ref_price"]))
+            print(f"#{i} {'BUY' if side == BUY else 'SELL'} {size} @{px} (mark={mark})")
         except Exception as e:  # ponytail: log-and-continue
             print("tick error:", e)
         i += 1

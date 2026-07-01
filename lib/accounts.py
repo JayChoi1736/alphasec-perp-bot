@@ -12,7 +12,7 @@ import os
 
 from eth_account import Account
 
-from dex import _to_int
+from lib.dex import _to_int
 
 
 def load_or_create(path, group, n):
