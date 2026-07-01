@@ -1,0 +1,31 @@
+{
+  "rpc_url": "http://YOUR_RPC_URL",
+  "dex_address": "0x00000000000000000000000000000000000000cc",
+  "market_id": 2,
+  "leverage": 10,
+  "margin_type": 0,
+  "interval": 2,
+  "ref_price": 1591,
+  "per_account_tps": 4,
+  "maker": {
+    "private_key": "0xMAKER_PRIVATE_KEY",
+    "order_size": 0.01,
+    "taker_slippage": 0.01,
+    "match_deposit": 5000,
+    "match_levels": 5,
+    "level_step": 0.001,
+    "inventory_cap": 0.5,
+    "spread": 0.001,
+    "crash_size": 0.2,
+    "crash_step": 0.05,
+    "crash_deposit": 300000,
+    "crash_lev": 20
+  },
+  "taker": {
+    "private_key": "0xTAKER_PRIVATE_KEY",
+    "order_size": 0.01,
+    "taker_slippage": 0.01
+  },
+  "fund_gas_eth": 0,
+  "keystore": "accounts-mtest.json"
+}

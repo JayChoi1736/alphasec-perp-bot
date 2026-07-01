@@ -1,5 +1,5 @@
 {
-  "rpc_url": "https://l2-rpc-qa.dexor.trade",
+  "rpc_url": "http://YOUR_RPC_URL",
   "dex_address": "0x00000000000000000000000000000000000000cc",
   "market_id": 24,
   "leverage": 10,

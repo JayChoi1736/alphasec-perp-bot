@@ -1,0 +1,27 @@
+{
+  "rpc_url": "http://YOUR_RPC_URL",
+  "dex_address": "0x00000000000000000000000000000000000000cc",
+  "market_id": 1,
+  "leverage": 10,
+  "margin_type": 0,
+  "interval": 2,
+  "ref_price": 58900,
+  "fund_gas_eth": 0,
+  "per_account_tps": 4,
+  "tick_size": 1,
+  "keystore": "accounts-qa.json",
+  "maker": {
+    "private_key": "0xMAKER_PRIVATE_KEY",
+    "spread": 0.001,
+    "taker_slippage": 0.01,
+    "order_size": 0.01,
+    "vault_sessions": 8,
+    "taker_count": 8,
+    "match_deposit": 1000,
+    "taker_cross_every": 1,
+    "maker_cancel_every": 6
+  },
+  "taker": {
+    "private_key": "0xTAKER_PRIVATE_KEY"
+  }
+}

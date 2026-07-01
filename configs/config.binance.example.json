@@ -1,0 +1,21 @@
+{
+  "rpc_url": "http://YOUR_RPC_URL",
+  "dex_address": "0x00000000000000000000000000000000000000cc",
+  "binance_feeder": {
+    "private_key": "0xORACLE_SUBMITTER_PRIVATE_KEY",
+    "auto_register": true,
+    "push_interval": 3,
+    "market_refresh": 300,
+    "quote": "USDT",
+    "symbols": [
+      "BTC",
+      "ETH",
+      "BNB",
+      "SOL",
+      "XRP",
+      "DOGE",
+      "ADA",
+      "AVAX"
+    ]
+  }
+}
