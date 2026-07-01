@@ -27,6 +27,8 @@ setup_dev.py, test_encode.py   root scripts — run with  python <name>.py
 | `bots/watch.py` | live orderbook depth/trade stream over WebSocket (ms timestamps) |
 | `bots/load.py` | **throughput** load — N accounts spam IOC orders to hit a target tx/s |
 | `bots/match.py` | **matched** load — maker/taker account pairs producing real fills, measures trade/s |
+| `bots/match_maker.py` | maker side of `match.py` as a standalone process (posts the ladder; no fills alone) |
+| `bots/match_taker.py` | taker side of `match.py` as a standalone process (inventory-capped crosses; measures trade/s) |
 | `bots/match_vault.py` | vault session-order load — vaults register session keys, sessions place orders |
 | **`lib/`** | |
 | `lib/dex.py` | `PerpDexClient` — encode/sign/send DEX commands, read RPC (account, lvl2, oracle, market info) |
@@ -179,6 +181,15 @@ rebalancing so it runs indefinitely:
   position sweeps a triangle wave inside the band and **margin never grows**.
 ```bash
 .venv/bin/python -m bots.match configs/config.dev.json <target_tx_s> [duration_s]   # duration 0 = until Ctrl-C
+```
+
+**Split variant** — the maker and taker halves as separate processes (same `maker`
+config block + keystore groups), for independent scaling / running on separate
+machines. Run both against the same market to get fills (`target_tx_s` is now
+per-side):
+```bash
+.venv/bin/python -m bots.match_maker configs/config.dev.json <target_tx_s> &   # posts the book
+.venv/bin/python -m bots.match_taker configs/config.dev.json <target_tx_s>     # crosses it, inventory-capped
 ```
 The target is **total tx/s** (submission rate, not fills). It fans out to
 `ceil(target / per_account_tps / 2)` maker + taker accounts, each paced to emit
